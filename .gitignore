@@ -1,0 +1,13 @@
+# Virtual environment (machine specific)
+.venv/
+
+# Large read-only source tick data
+data/
+
+# Archives
+*.zip
+
+# Python / notebook caches
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
