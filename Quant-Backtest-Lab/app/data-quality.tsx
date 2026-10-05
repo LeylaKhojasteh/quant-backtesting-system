@@ -1,65 +1,68 @@
 'use client';
 
-import { Check, Info } from 'lucide-react';
-import { Progress } from '@/components/ui/progress';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Info } from 'lucide-react';
+import { useRun } from './run-context';
 
 /**
- * Dataset quality summary.
- * Modeling Quality stays labelled Demo / Preview because the production
- * definition will come from the real validation engine.
+ * Dataset quality summary — driven by BacktestRun.dataQuality.
+ * In demo mode, status is 'Demo / not measured'; no fabricated percentages.
  */
 export function DataQualityPanel() {
+  const state = useRun();
+  if (state.status !== 'ready') {
+    return (
+      <section className="data-quality">
+        <p className="demo-note">Loading reference run…</p>
+      </section>
+    );
+  }
+  const run = state.run;
+  const q = run.dataQuality;
+  const ticks = q.inRangeTicks;
+
   const fields: [string, string][] = [
-    ['Dataset', 'XAUUSD_DUKAS_2025_01_ticks.csv'],
-    ['Total Ticks', '~8.4 M'],
-    ['Ticks in Range', '322,548'],
-    ['Candles', '88'],
-    ['Signals', '88'],
-    ['Executed Trades', '7'],
+    ['Dataset', run.dataSource.name],
+    ['Total Ticks', 'Not measured'],
+    ['Ticks in Range', ticks === null || ticks === undefined ? 'Not measured' : `${ticks.toLocaleString('en-US')} · seeded example`],
+    ['Candles', `${q.candles ?? '—'} · seeded`],
+    ['Signals', `${q.candles ?? '—'} · seeded`],
+    ['Executed Trades', String(run.metrics.trades)],
   ];
 
   return (
-    <TooltipProvider delayDuration={200}>
-      <section className="data-quality">
-        <dl className="data-quality-grid">
-          {fields.map(([k, v]) => (
-            <div key={k}>
-              <dt>{k}</dt>
-              <dd>{v}</dd>
-            </div>
-          ))}
-        </dl>
-
-        <div className="quality quality-prominent">
-          <div>
-            <span>
-              Modeling Quality
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button className="help" aria-label="About Modeling Quality">
-                    <Info size={12} />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent className="max-w-80">
-                  99.12% is demo data. The production definition will be supplied by the real data-validation
-                  engine.
-                </TooltipContent>
-              </Tooltip>
-            </span>
-            <b>99.12%</b>
+    <section className="data-quality">
+      <dl className="data-quality-grid">
+        {fields.map(([k, v]) => (
+          <div key={k}>
+            <dt>{k}</dt>
+            <dd>{v}</dd>
           </div>
-          <Progress value={99.12} />
-        </div>
+        ))}
+      </dl>
 
-        <div className="baseline">
-          <Check size={17} />
-          <div>
-            <strong>Baseline Match</strong>
-            <span>Verified reference <span className="meta">· demo</span></span>
-          </div>
+      <div className="quality quality-prominent">
+        <div>
+          <span>Dataset Status <Info size={12} /></span>
+          <b>Demo / not measured</b>
         </div>
-      </section>
-    </TooltipProvider>
+        <p className="demo-note">Awaiting data validation engine; no verified metrics in demo mode.</p>
+      </div>
+
+      <div className="quality quality-prominent">
+        <div>
+          <span>Modeling Quality</span>
+          <b>Not measured</b>
+        </div>
+        <p className="demo-note">No percentage is shown in demo mode.</p>
+      </div>
+
+      <div className="baseline">
+        <Info size={17} />
+        <div>
+          <strong>Seeded reference</strong>
+          <span>Baseline match for the demo replay <span className="meta">· demo</span></span>
+        </div>
+      </div>
+    </section>
   );
 }

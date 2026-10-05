@@ -3,6 +3,7 @@
 // MAE/MFE come from the seeded replay path (see demo.tradePath) and are labelled
 // as seeded in the UI until the Python engine supplies observed excursions.
 import { candles, trades, tradePath, type Trade } from './demo';
+import type { BacktestRun } from './schema';
 
 export type Excursion = { mae: number; mfe: number; maeTime: number; mfeTime: number };
 
@@ -40,6 +41,32 @@ export function enrich(list: readonly Trade[]): EnrichedTrade[] {
   }));
 }
 
+/**
+ * Rebuilds demo Trade records from a canonical BacktestRun's trades, so the
+ * seeded replay path (MAE/MFE) and every derived statistic are computed from
+ * the single run source instead of scattered fixtures.
+ */
+export function enrichRunTrades(run: BacktestRun): EnrichedTrade[] {
+  const ordered = run.trades
+    .map((t) => ({
+      id: t.id,
+      direction: t.direction,
+      signal: Date.parse(t.signalTimeUtc),
+      entryTime: Date.parse(t.entryTimeUtc),
+      exitTime: Date.parse(t.exitTimeUtc),
+      entry: t.entry,
+      exit: t.exit,
+      pnl: t.pnl,
+      reason: t.reason,
+      spreadIn: t.spreadIn,
+      spreadOut: t.spreadOut,
+      sl: t.sl ?? t.entry,
+      tp: t.tp ?? t.entry,
+    }))
+    .sort((a, b) => a.exitTime - b.exitTime);
+  return enrich(ordered);
+}
+
 function round4(n: number) {
   return Math.round(n * 1e4) / 1e4;
 }
@@ -56,12 +83,13 @@ function stdev(v: readonly number[]) {
   return Math.sqrt(sum(v.map((x) => (x - m) ** 2)) / (v.length - 1));
 }
 
-/** Demo account base the balance preview is measured against. */
-export const START_BALANCE = 10000;
-
 // ---------------------------------------------------------------------------
-// Performance metrics
+// Performance metrics — PRICE TERMS ONLY
 // ---------------------------------------------------------------------------
+// Nothing in this module is an account-currency result. PnL is expressed in
+// instrument price points; any metric that requires an account (balance,
+// currency return, annualisation) is either null or explicitly gated, never
+// synthesised from an arbitrary base balance.
 
 export type PerformanceMetrics = {
   trades: number;
@@ -78,8 +106,6 @@ export type PerformanceMetrics = {
   grossProfit: number;
   grossLoss: number;
   profitFactor: number;
-  /** Net PnL against the demo account base, in percent. */
-  returnPct: number;
 };
 
 export function performance(list: readonly EnrichedTrade[]): PerformanceMetrics {
@@ -107,7 +133,6 @@ export function performance(list: readonly EnrichedTrade[]): PerformanceMetrics 
     grossProfit,
     grossLoss,
     profitFactor: grossLoss === 0 ? 0 : grossProfit / Math.abs(grossLoss),
-    returnPct: (netPnl / START_BALANCE) * 100,
   };
 }
 
@@ -120,37 +145,123 @@ export function tradingSpanMs(list: readonly EnrichedTrade[]) {
   return Math.max(...list.map((t) => t.exitTime)) - Math.min(...list.map((t) => t.entryTime));
 }
 
-export type AdvancedPerformance = {
-  /** Net PnL against the demo account base, in percent. */
-  totalReturnPct: number;
-  /**
-   * Naive annualization of `totalReturnPct` over the observed span. The demo
-   * covers a single 22h session, so this is arithmetic only, not a forecast.
-   */
-  annualizedReturnPct: number;
-  /** Downside-deviation ratio: mean PnL / stdev of losing PnL only. */
-  sortino: number;
-  /** Total return divided by maximum drawdown. */
-  calmar: number;
+/** Annualisation acceptance threshold: a sample must span at least 90 days… */
+export const MIN_ANNUALIZE_SPAN_DAYS = 90;
+/** …and contain at least 30 observations. */
+export const MIN_ANNUALIZE_OBSERVATIONS = 30;
+
+export function canAnnualize(spanMs: number, observations: number): boolean {
+  const days = spanMs / (24 * 3600 * 1000);
+  return days >= MIN_ANNUALIZE_SPAN_DAYS && observations >= MIN_ANNUALIZE_OBSERVATIONS;
+}
+
+export type AccountDrawdown = {
+  /** Peak-to-trough decline of the account balance series, in account currency. */
+  maxDrawdown: number | null;
+  /** maxDrawdown / peakBalance * 100; null when no valid peak balance exists. */
+  maxDrawdownPct: number | null;
+  peakBalance: number | null;
+  reason: string | null;
 };
 
 /**
- * Annualization is only meaningful over a long sample. The seeded run spans
- * hours, so callers must label these values as indicative, not expected.
+ * Correct account drawdown from an account-currency balance series.
+ * This is the ONLY place a percentage drawdown may be produced.
  */
-export function advancedPerformance(list: readonly EnrichedTrade[]): AdvancedPerformance {
-  const p = performance(list);
-  const r = risk(list);
+export function accountDrawdown(balances: readonly number[]): AccountDrawdown {
+  if (!balances.length) {
+    return { maxDrawdown: null, maxDrawdownPct: null, peakBalance: null, reason: 'No account balance series available.' };
+  }
+  let peak = -Infinity;
+  let peakBalance = 0;
+  let maxDecline = 0;
+  for (const b of balances) {
+    if (b > peak) {
+      peak = b;
+      peakBalance = b;
+    }
+    const decline = peak - b;
+    if (decline > maxDecline) maxDecline = decline;
+  }
+  if (!(peakBalance > 0)) {
+    return { maxDrawdown: null, maxDrawdownPct: null, peakBalance: null, reason: 'Peak account balance is not positive; percentage drawdown is undefined.' };
+  }
+  return { maxDrawdown: maxDecline, maxDrawdownPct: (maxDecline / peakBalance) * 100, peakBalance: peakBalance, reason: null };
+}
+
+export type AdvancedPerformance = {
+  /**
+   * Account-currency total return, percent. Null until an account balance
+   * series exists; price-term PnL must never be divided into a percentage
+   * against an arbitrary base.
+   */
+  totalReturnPct: number | null;
+  /** Null unless canAnnualize(spanMs, observations) holds. */
+  annualizedReturnPct: number | null;
+  /** Standard Sortino needs periodic account returns + target return; null until then. */
+  sortino: number | null;
+  calmar: number | null;
+  annualizable: boolean;
+  /** Exact reasons each metric is unavailable; rendered verbatim. */
+  reasons: {
+    totalReturnPct: string | null;
+    annualizedReturnPct: string | null;
+    sortino: string | null;
+    calmar: string | null;
+  };
+};
+
+/**
+ * Account-level performance. For the seeded price-term run every value is
+ * null with an explicit reason: these statistics are not synthesised from a
+ * fictional account.
+ */
+export function advancedPerformance(list: readonly EnrichedTrade[], balances: readonly number[] | null = null): AdvancedPerformance {
   const span = tradingSpanMs(list);
-  const years = span > 0 ? span / (365.25 * 24 * 3600 * 1000) : 0;
-  const downside = list.filter((t) => t.pnl < 0).map((t) => t.pnl);
-  const dev = downside.length > 1 ? Math.sqrt(sum(downside.map((x) => x * x)) / (downside.length - 1)) : 0;
-  const growth = years > 0 ? Math.pow(1 + p.returnPct / 100, 1 / years) - 1 : 0;
+  const annualizable = canAnnualize(span, list.length);
+  const days = span / (24 * 3600 * 1000);
+  const sortinoReason =
+    'Standard Sortino requires a periodic account-return series (returns per period and a target return); it is not computed from seven price-term trades.';
+  let totalReturnPct: number | null = null;
+  let totalReturnReason: string | null =
+    'No account-currency balance series (account currency, lot sizing, commission, conversion). Price-term PnL is not converted.';
+  let annualized: number | null = null;
+  let annualizedReason: string | null =
+    `Sample spans ${days.toFixed(1)} days over ${list.length} trades; annualisation requires >= ${MIN_ANNUALIZE_SPAN_DAYS} days and >= ${MIN_ANNUALIZE_OBSERVATIONS} observations.`;
+  let calmar: number | null = null;
+  let calmarReason: string | null = totalReturnReason;
+  if (balances && balances.length > 1) {
+    const start = balances[0];
+    const end = balances[balances.length - 1];
+    if (start > 0) {
+      totalReturnPct = ((end - start) / start) * 100;
+      totalReturnReason = null;
+      if (annualizable && start > 0) {
+        const years = days / 365.25;
+        annualized = (Math.pow(1 + totalReturnPct / 100, 1 / years) - 1) * 100;
+        annualizedReason = null;
+        const dd = accountDrawdown(balances);
+        if (dd.maxDrawdownPct !== null && dd.maxDrawdownPct > 0) {
+          calmar = totalReturnPct / dd.maxDrawdownPct;
+          calmarReason = null;
+        } else {
+          calmarReason = 'Maximum account drawdown is not positive; Calmar is undefined.';
+        }
+      }
+    }
+  }
   return {
-    totalReturnPct: p.returnPct,
-    annualizedReturnPct: growth * 100,
-    sortino: dev === 0 ? 0 : p.expectancy / dev,
-    calmar: r.maxDrawdown === 0 ? 0 : p.returnPct / r.maxDrawdown,
+    totalReturnPct,
+    annualizedReturnPct: annualized,
+    sortino: null,
+    calmar,
+    annualizable,
+    reasons: {
+      totalReturnPct: totalReturnReason,
+      annualizedReturnPct: annualizedReason,
+      sortino: sortinoReason,
+      calmar: calmarReason,
+    },
   };
 }
 
@@ -350,7 +461,8 @@ export function streaks(list: readonly EnrichedTrade[]): Streak[] {
 
 export type RiskMetrics = {
   maxDrawdown: number;
-  maxDrawdownPct: number;
+  /** Percent drawdown needs an account balance peak; null until an account model exists. */
+  maxDrawdownPct: number | null;
   maxLosingStreak: number;
   maxWinningStreak: number;
   recoveryFactor: number;
@@ -362,8 +474,11 @@ export type RiskMetrics = {
   avgSpreadOut: number;
   /** Sample standard deviation of per-trade PnL, in price terms. */
   volatility: number;
-  /** Mean per-trade PnL divided by its standard deviation. Not annualized. */
-  sharpe: number;
+  /**
+   * A Sharpe ratio requires a valid account return series; per-trade PnL
+   * dispersion is not a Sharpe. Null until an account return series exists.
+   */
+  sharpe: number | null;
 };
 
 export function risk(list: readonly EnrichedTrade[]): RiskMetrics {
@@ -376,7 +491,10 @@ export function risk(list: readonly EnrichedTrade[]): RiskMetrics {
   const volatility = stdev(pnls);
   return {
     maxDrawdown,
-    maxDrawdownPct: maxDrawdown,
+    // A percentage drawdown needs an account balance peak; the price-term PnL
+    // curve cannot be labelled as a percent. Kept null until an account model
+    // exists (see accountDrawdown, the only place a pct may be produced).
+    maxDrawdownPct: null,
     maxLosingStreak: lossRuns.length ? Math.max(...lossRuns.map((s) => s.count)) : 0,
     maxWinningStreak: winRuns.length ? Math.max(...winRuns.map((s) => s.count)) : 0,
     recoveryFactor: maxDrawdown === 0 ? 0 : sum(pnls) / maxDrawdown,
@@ -387,7 +505,9 @@ export function risk(list: readonly EnrichedTrade[]): RiskMetrics {
     avgSpreadIn: mean(list.map((t) => t.spreadIn)),
     avgSpreadOut: mean(list.map((t) => t.spreadOut)),
     volatility,
-    sharpe: volatility === 0 ? 0 : mean(pnls) / volatility,
+    // Per-trade PnL dispersion is not a Sharpe ratio. Null until an account
+    // return series exists (the type above documents this).
+    sharpe: null,
   };
 }
 
@@ -410,26 +530,13 @@ export function drawdownSeries(list: readonly EnrichedTrade[]) {
   });
 }
 
-/** Demo account equity: the start balance plus the closed-trade PnL series. */
-export function balanceSeries(list: readonly EnrichedTrade[], start = START_BALANCE) {
-  return equitySeries(list).map((v) => start + v);
-}
-
-/** Account-level summary for the equity panel footer. */
-export function equitySummary(list: readonly EnrichedTrade[], start = START_BALANCE) {
-  const balances = balanceSeries(list, start);
-  const final = balances.length ? balances[balances.length - 1] : start;
-  const peak = balances.length ? Math.max(...balances, start) : start;
-  const lowest = balances.length ? Math.min(...balances, start) : start;
-  return {
-    start,
-    final,
-    peak,
-    lowest,
-    netChange: final - start,
-    totalReturn: ((final - start) / start) * 100,
-  };
-}
+/**
+ * NOTE: no account balance/equity series is derived here. Adding price-term
+ * PnL to an arbitrary base balance (the old balanceSeries / equitySummary)
+ * fabricated account results and has been removed. Account balance/equity
+ * series come from the BacktestRun model (run.equity) when
+ * account.accountReady is true.
+ */
 
 export function pnlHistogram(list: readonly EnrichedTrade[], binCount = 9) {
   const pnls = list.map((t) => t.pnl);
@@ -505,14 +612,5 @@ export function exitStats(list: readonly EnrichedTrade[]): ExitStat[] {
     })
     .filter((r) => r.count > 0);
 }
-
-/** Seeded run identity used by the research placeholders. */
-export const runMeta = {
-  strategyVersion: 'candle-direction v1',
-  parametersSnapshot: { stopDistance: 5, takeProfitDistance: 10, timeframe: 'M15', symbol: 'XAUUSD' },
-  backtestId: 'demo-run-0001',
-  runTimestamp: '2025-01-31T22:00:00Z',
-  dataSource: 'Seeded demo replay',
-};
 
 export const enriched: EnrichedTrade[] = enrich(trades);

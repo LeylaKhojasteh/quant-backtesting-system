@@ -1,9 +1,11 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Minus, Plus, RotateCcw } from 'lucide-react';
-import { candles, cumulative, fmt, time, ticks, tradePath, trades, type Candle, type Trade } from './demo';
-import { excursions, START_BALANCE } from './analytics';
+import { candles, fmt, time, ticks, tradePath, trades, type Candle, type Trade } from './demo';
+import { excursions } from './analytics';
+import { useRun } from './run-context';
+import { formatUtc, formatUtcMs } from './utc';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
 const green = 'var(--success)';
@@ -702,46 +704,98 @@ export function TickChart({ trade, view }: { trade: Trade; view: string }) {
 export function Equity({ mode }: { mode: string }) {
   const [hover, setHover] = useState<number | null>(null);
   const { ref, width, height, ready } = useElementSize();
+  const state = useRun();
+  const run = state.status === 'ready' ? state.run : null;
 
-  // Two account views of the same closed-trade series, each on its own scale:
-  // cumulative PnL in price terms and demo balance in account units.
-  const pnl = cumulative;
-  const balance = pnl.map((v) => START_BALANCE + v);
-  const drawdown = pnl.map((v, i) => v - Math.max(0, ...pnl.slice(0, i + 1)));
+  // Compute derived data in hooks at the top (before any early returns)
+  const pnl = useMemo(() => run?.equity.map((p) => p.pnl) ?? [], [run]);
+  const timestamps = useMemo(() => run?.equity.map((p) => p.timestampUtc) ?? [], [run]);
+  const accountReady = run?.account.accountReady ?? false;
+  const balance = useMemo(
+    () => (accountReady ? run!.equity.map((p) => p.balance ?? 0) : null),
+    [run, accountReady]
+  );
+
+  const drawdown = useMemo(() => {
+    const result: number[] = [];
+    let peak = 0;
+    for (const v of pnl) {
+      peak = Math.max(peak, v);
+      result.push(peak - v);
+    }
+    return result;
+  }, [pnl]);
+
+  // Loading / error state
+  if (!run) {
+    return (
+      <div className="equity">
+        <svg ref={ref} role="img" aria-label="Equity chart loading"></svg>
+        <div className="equity-empty">
+          <h3>Equity Chart</h3>
+          <p>{state.status === 'loading' ? 'Loading reference run…' : state.status === 'error' ? state.error : state.status === 'malformed' ? state.message : 'Unknown state'}</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Balance mode without account data
+  if (mode === 'Balance' && !accountReady) {
+    return (
+      <div className="equity">
+        <svg ref={ref} role="img" aria-label="Balance chart unavailable"></svg>
+        <div className="equity-empty">
+          <h3>Balance — Not available</h3>
+          <p>
+            A balance chart requires a valid account model. The seeded demo produces PnL in price
+            terms only; price PnL is never added to an assumed base balance.
+          </p>
+          <ul>
+            {(run.metrics.accountUnavailableReasons ?? []).map((r) => (
+              <li key={r}>{r}</li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    );
+  }
+
+  const showBalance = mode === 'Balance' && balance !== null;
   const underwater = mode === 'Drawdown';
-  const balanceFirst = mode === 'Balance';
 
-  const pnlLo = Math.min(0, ...pnl) - 3;
-  const pnlHi = Math.max(0, ...pnl) + 3;
-  const balanceSpan = Math.max(...balance) - Math.min(...balance);
-  const balancePad = Math.max(6, balanceSpan * 0.5);
-  const balLo = Math.min(...balance, START_BALANCE) - balancePad;
-  const balHi = Math.max(...balance, START_BALANCE) + balancePad;
-  const ddHi = Math.max(1, ...drawdown) + 1;
+  let lo: number;
+  let hi: number;
+  if (underwater) {
+    lo = -1;
+    hi = Math.max(1, ...drawdown) + 1;
+  } else if (showBalance && balance) {
+    const span = Math.max(...balance) - Math.min(...balance);
+    const padAmt = Math.max(6, span * 0.5);
+    lo = Math.min(...balance) - padAmt;
+    hi = Math.max(...balance) + padAmt;
+  } else {
+    lo = Math.min(0, ...pnl) - 3;
+    hi = Math.max(0, ...pnl) + 3;
+  }
 
-  const summary = {
-    final: balance[balance.length - 1] ?? START_BALANCE,
-    peak: Math.max(...balance, START_BALANCE),
-    lowest: Math.min(...balance, START_BALANCE),
-    ret: ((balance[balance.length - 1] - START_BALANCE) / START_BALANCE) * 100,
-  };
-
-  const pad = { l: 46, r: underwater ? 14 : 50, t: 14, b: 24 };
+  const pad = { l: 46, r: 14, t: 14, b: 24 };
   const plotW = Math.max(40, width - pad.l - pad.r);
   const plotH = Math.max(40, height - pad.t - pad.b);
   const last = Math.max(1, pnl.length - 1);
   const x = (i: number) => (pnl.length === 1 ? pad.l + plotW / 2 : pad.l + (i / last) * plotW);
-  const yPnl = (v: number) => pad.t + ((pnlHi - v) / (pnlHi - pnlLo || 1)) * plotH;
-  const yBal = (v: number) => pad.t + ((balHi - v) / (balHi - balLo || 1)) * plotH;
-  const yDd = (v: number) => pad.t + ((ddHi - v) / (ddHi || 1)) * plotH;
+  const y = (v: number) => pad.t + ((hi - v) / (hi - lo || 1)) * plotH;
 
-  const path = (ys: (v: number) => number, vs: readonly number[]) =>
-    vs.map((v, i) => `${i ? 'L' : 'M'}${x(i)} ${ys(v)}`).join(' ');
-  const area = (ys: (v: number) => number, vs: readonly number[]) =>
-    `${path(ys, vs)} L${x(last)} ${pad.t + plotH} L${x(0)} ${pad.t + plotH} Z`;
+  const primary = underwater ? drawdown : showBalance && balance ? balance : pnl;
+  const path = primary.map((v, i) => `${i ? 'L' : 'M'}${x(i)} ${y(v)}`).join(' ');
+  const area = `${path} L${x(last)} ${pad.t + plotH} L${x(0)} ${pad.t + plotH} Z`;
+  const accent = underwater ? 'var(--warning)' : blue;
 
-  const primaryYs = underwater ? yDd : balanceFirst ? yBal : yPnl;
-  const primaryVals = underwater ? drawdown : balanceFirst ? balance : pnl;
+  const finalBalance = balance ? balance[balance.length - 1] : null;
+  const startBalance = balance && balance.length > 1 ? balance[0] : null;
+  const totalReturnPct =
+    finalBalance !== null && startBalance !== null && startBalance > 0
+      ? ((finalBalance - startBalance) / startBalance) * 100
+      : null;
 
   return (
     <div className="equity">
@@ -750,51 +804,26 @@ export function Equity({ mode }: { mode: string }) {
           <g>
             {[0, 1, 2, 3, 4].map((i) => {
               const gy = pad.t + (plotH / 4) * i;
-              const frac = 1 - i / 4;
-              const left = underwater
-                ? (ddHi * frac).toFixed(2)
-                : ((pnlHi - (pnlHi - pnlLo) * frac) as number).toFixed(underwater ? 2 : 1);
-              const right = underwater ? null : (balLo + (balHi - balLo) * frac).toFixed(0);
               return (
                 <g key={`eg${i}`}>
                   <line x1={pad.l} x2={pad.l + plotW} y1={gy} y2={gy} className="gridline" />
-                  <text x={4} y={gy + 4} style={{ fontSize: 10 }}>{left}</text>
-                  {right !== null && (
-                    <text x={pad.l + plotW + 6} y={gy + 4} style={{ fontSize: 10 }}>{right}</text>
-                  )}
+                  <text x={4} y={gy + 4} style={{ fontSize: 10 }}>{(hi - ((hi - lo) * i) / 4).toFixed(showBalance ? 0 : 1)}</text>
                 </g>
               );
             })}
 
-            {/* start-of-run reference: zero PnL is the 10,000 demo base */}
-            {!underwater && (
+            {/* zero-PnL reference line for the price-term view */}
+            {!underwater && !showBalance && (
               <>
-                <line x1={pad.l} x2={pad.l + plotW} y1={yPnl(0)} y2={yPnl(0)} stroke="var(--muted-foreground)" strokeDasharray="3 3" />
-                <text x={pad.l + plotW + 6} y={yPnl(0) + 4} style={{ fontSize: 9 }}>{START_BALANCE.toLocaleString()}</text>
+                <line x1={pad.l} x2={pad.l + plotW} y1={y(0)} y2={y(0)} stroke="var(--muted-foreground)" strokeDasharray="3 3" />
+                <text x={pad.l + plotW - 2} y={y(0) - 4} textAnchor="end" style={{ fontSize: 9 }}>0</text>
               </>
             )}
 
-            <path d={area(primaryYs, primaryVals)} fill={underwater ? 'var(--warning)' : blue} opacity=".09" />
-            <path
-              d={path(primaryYs, primaryVals)}
-              stroke={underwater ? 'var(--warning)' : blue}
-              strokeWidth="1.8"
-              fill="none"
-            />
+            <path d={area} fill={accent} opacity=".09" />
+            <path d={path} stroke={accent} strokeWidth="1.8" fill="none" />
 
-            {/* second account view, dashed so the two scales stay distinguishable */}
-            {!underwater && (
-              <path
-                d={path(balanceFirst ? yPnl : yBal, balanceFirst ? pnl : balance)}
-                stroke="var(--warning)"
-                strokeWidth="1.3"
-                strokeDasharray="4 3"
-                fill="none"
-                opacity=".95"
-              />
-            )}
-
-            {primaryVals.map((v, i) => (
+            {primary.map((v, i) => (
               <g key={i} onPointerEnter={() => setHover(i)}>
                 <rect
                   x={x(i) - Math.max(6, plotW / pnl.length / 2)}
@@ -803,21 +832,22 @@ export function Equity({ mode }: { mode: string }) {
                   height={plotH}
                   fill="transparent"
                 />
-                <circle cx={x(i)} cy={primaryYs(v)} r={hover === i ? 4.5 : 2.4} fill={underwater ? 'var(--warning)' : blue} />
-                {!underwater && (
-                  <circle cx={x(i)} cy={(balanceFirst ? yPnl : yBal)(balanceFirst ? pnl[i] : balance[i])} r="2" fill="var(--warning)" />
-                )}
+                <circle cx={x(i)} cy={y(v)} r={hover === i ? 4.5 : 2.4} fill={accent} />
                 <text x={x(i)} y={pad.t + plotH + 17} textAnchor="middle" style={{ fontSize: 10 }}>
                   {i + 1}
                 </text>
               </g>
             ))}
 
-            {hover !== null && (
+            {hover !== null && hover < primary.length && (
               <text x={pad.l} y={pad.t - 4} style={{ fontSize: 11 }}>
-                {underwater
-                  ? `Trade ${hover + 1} · drawdown ${fmt(drawdown[hover])}`
-                  : `Trade ${hover + 1} · PnL ${fmt(pnl[hover])} · balance ${fmt(balance[hover])}`}
+                {`Trade ${hover + 1} · ${formatUtcMs(Date.parse(timestamps[hover]))} · ${
+                  underwater
+                    ? `drawdown ${fmt(drawdown[hover])}`
+                    : showBalance && balance
+                      ? `balance ${fmt(balance[hover])}`
+                      : `PnL ${fmt(pnl[hover])}`
+                }`}
               </text>
             )}
           </g>
@@ -825,23 +855,25 @@ export function Equity({ mode }: { mode: string }) {
       </svg>
       <div className="chart-foot equity-legend">
         {underwater ? (
-          <>
-            <span><i style={{ background: 'var(--warning)' }} />Drawdown</span>
-          </>
+          <span><i style={{ background: 'var(--warning)' }} />Drawdown · price terms — not account currency</span>
+        ) : showBalance ? (
+          <span><i style={{ background: blue }} />Balance · account currency</span>
         ) : (
-          <>
-            <span><i style={{ background: 'var(--primary)' }} />Cumulative PnL · left</span>
-            <span><i className="dashed" />Balance · right</span>
-          </>
+          <span><i style={{ background: blue }} />Cumulative PnL · price terms — not account currency</span>
         )}
         <span className="chart-hint">Trade #</span>
       </div>
       <dl className="equity-summary">
-        <div><dt>Starting Balance</dt><dd>{START_BALANCE.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</dd></div>
-        <div><dt>Ending Balance</dt><dd>{summary.final.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</dd></div>
-        <div><dt>Peak Balance</dt><dd>{summary.peak.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</dd></div>
-        <div><dt>Lowest Balance</dt><dd>{summary.lowest.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</dd></div>
-        <div><dt>Total Return</dt><dd className={summary.ret < 0 ? 'bad-text' : 'good-text'}>{summary.ret.toFixed(2)}%</dd></div>
+        <div><dt>Final PnL</dt><dd>{fmt(pnl[pnl.length - 1] ?? 0)} <span className="meta">price terms</span></dd></div>
+        <div><dt>Max Drawdown</dt><dd>{fmt(drawdown.length ? Math.max(...drawdown) : 0)} <span className="meta">price terms</span></dd></div>
+        <div>
+          <dt>Balance</dt>
+          <dd>{finalBalance !== null ? fmt(finalBalance) : 'Not available'}</dd>
+        </div>
+        <div>
+          <dt>Total Return</dt>
+          <dd>{totalReturnPct !== null ? <span className={totalReturnPct < 0 ? 'bad-text' : 'good-text'}>{totalReturnPct.toFixed(2)}%</span> : 'Not available'}</dd>
+        </div>
       </dl>
     </div>
   );

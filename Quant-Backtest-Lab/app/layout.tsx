@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { RunProvider } from "./run-context";
 
 export const metadata: Metadata = {
   title: "Quant Backtest Lab",
@@ -20,7 +21,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="dark">
-      <body className="antialiased">{children}</body>
+      <body className="antialiased">
+        <RunProvider>{children}</RunProvider>
+      </body>
     </html>
   );
 }

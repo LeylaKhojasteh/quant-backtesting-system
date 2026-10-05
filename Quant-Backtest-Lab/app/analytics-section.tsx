@@ -9,6 +9,7 @@ import {
   drawdownPeriods,
   drawdownSeries,
   entriesByHour,
+  enrichRunTrades,
   equitySeries,
   exitQuality,
   exitStats,
@@ -19,6 +20,8 @@ import {
   tradeQuality,
   type EnrichedTrade,
 } from './analytics';
+import { useRun } from './run-context';
+import { formatUtc, formatUtcMs } from './utc';
 
 const GREEN = 'var(--success)';
 const RED = 'var(--danger)';
@@ -105,7 +108,7 @@ export function EquityAnalysis({ rows }: { rows: readonly EnrichedTrade[] }) {
             </g>
           )}
         </svg>
-        <span className="chart-caption">Cumulative PnL (price terms)</span>
+        <span className="chart-caption">Cumulative PnL · price terms — not account currency</span>
       </div>
       <div className="equity-analysis-chart">
         <svg ref={ddRef} role="img" aria-label="Drawdown curve, closed trades">
@@ -120,12 +123,6 @@ export function EquityAnalysis({ rows }: { rows: readonly EnrichedTrade[] }) {
                   </g>
                 );
               })}
-              <path
-                d={dd.map((v, i) => `${i ? 'L' : 'M'}${x(i)} ${y(v)}`).join(' ')}
-                stroke={WARNING}
-                strokeWidth="1.8"
-                fill="none"
-              />
               <path
                 d={dd.map((v, i) => `${i ? 'L' : 'M'}${x(i)} ${ddY(v)}`).join(' ')}
                 stroke={WARNING}
@@ -142,7 +139,7 @@ export function EquityAnalysis({ rows }: { rows: readonly EnrichedTrade[] }) {
             </g>
           )}
         </svg>
-        <span className="chart-caption">Drawdown (closed trades)</span>
+        <span className="chart-caption">Drawdown · price terms — not account currency</span>
       </div>
     </div>
   );
@@ -293,49 +290,41 @@ export function ExitAnalysis({ rows }: { rows: readonly EnrichedTrade[] }) {
   );
 }
 
-/** Placeholders for the upcoming strategy comparison workflow. */
-export function RunIdentity({
-  strategyVersion,
-  parameters,
-  backtestId,
-  runTimestamp,
-}: {
-  strategyVersion: string;
-  parameters: Record<string, string | number>;
-  backtestId: string;
-  runTimestamp: string;
-}) {
+/** Run Identity — shows the parameter snapshot of the displayed run. */
+export function RunIdentity() {
+  const state = useRun();
+  if (state.status !== 'ready') return null;
+  const run = state.run;
   return (
     <section className="run-identity panel">
       <div className="panel-head">
         <h2><TrendingUp size={16} />Run Identity</h2>
-        <span className="tag neutral">Comparison ready</span>
+        <span className="tag neutral">{run.dataMode === 'seeded-demo' ? 'Seeded demo' : 'Live'}</span>
       </div>
       <dl className="run-identity-grid">
-        <div><dt>Strategy version</dt><dd>{strategyVersion}</dd></div>
-        <div><dt>Backtest ID</dt><dd>{backtestId}</dd></div>
-        <div><dt>Run timestamp</dt><dd>{runTimestamp}</dd></div>
+        <div><dt>Strategy</dt><dd>{run.strategy.name} · {run.strategy.version}</dd></div>
+        <div><dt>Run ID</dt><dd>{run.runId}</dd></div>
+        <div><dt>Run timestamp</dt><dd>{formatUtcMs(Date.parse(run.runTimestampUtc), { withSeconds: true })}</dd></div>
         <div className="run-identity-params">
           <dt>Parameters snapshot</dt>
-          <dd>{Object.entries(parameters).map(([k, v]) => <span key={k}>{k}: {String(v)}</span>)}</dd>
+          <dd>{Object.entries(run.strategy.parameters).map(([k, v]) => <span key={k}>{k}: {String(v)}</span>)}</dd>
         </div>
       </dl>
       <p className="run-identity-note">
-        Placeholder for multi-strategy comparison (Hull v1 / EMA v2 / Price Action v3). Stored per run so
-        results can be diffed later; no comparison logic is implemented yet.
+        Parameter snapshot of the displayed run. Placeholder for multi-strategy comparison; no comparison logic is implemented yet.
       </p>
     </section>
   );
 }
 
-export type Metric = { label: string; value: string; note: string; tone?: 'good' | 'bad' };
+export type Metric = { label: string; value: string; note: string; tone?: 'good' | 'bad'; pending?: boolean };
 
 /** Compact labelled block used by the new research sections. */
-function Stat({ label, value, note, tone }: Metric) {
+function Stat({ label, value, note, tone, pending }: Metric) {
   return (
     <div className="stat-cell">
       <span>{label}</span>
-      <strong className={tone ? `${tone}-text` : undefined}>{value}</strong>
+      <strong className={pending ? 'muted' : tone ? `${tone}-text` : undefined}>{value}</strong>
       <small>{note}</small>
     </div>
   );
@@ -359,7 +348,6 @@ function StatGrid({ title, note, items }: { title: string; note?: string; items:
 }
 
 const HOUR = (h: number) => `${String(h).padStart(2, '0')}:00`;
-const STAMP = (t: number) => new Date(t).toISOString().slice(11, 16) + ' UTC';
 const MINS = (m: number | null) => (m === null ? '—' : m >= 60 ? `${Math.floor(m / 60)}h ${Math.round(m % 60)}m` : `${m.toFixed(0)}m`);
 
 /** Return quality, downside risk, and capital efficiency in R units. */
@@ -370,22 +358,22 @@ export function PerformanceQuality({ rows }: { rows: readonly EnrichedTrade[] })
     <div className="quality-sections">
       <StatGrid
         title="Return & Risk-Adjusted"
-        note="indicative · 22h sample"
+        note="account terms · not available for seeded demo"
         items={[
-          { label: 'Total Return', value: `${a.totalReturnPct.toFixed(2)}%`, note: 'Net PnL against the 10,000 demo base', tone: a.totalReturnPct < 0 ? 'bad' : 'good' },
-          { label: 'Annualized Return', value: `${a.annualizedReturnPct.toFixed(2)}%`, note: 'Arithmetic annualization of a single session. Not a forecast.', tone: a.annualizedReturnPct < 0 ? 'bad' : 'good' },
-          { label: 'Sortino Ratio', value: a.sortino.toFixed(2), note: 'Mean PnL / stdev of losing trades only', tone: a.sortino < 0 ? 'bad' : 'good' },
-          { label: 'Calmar Ratio', value: a.calmar.toFixed(2), note: 'Total return % divided by maximum drawdown', tone: a.calmar < 0 ? 'bad' : 'good' },
+          { label: 'Total Return', value: 'Not available', note: a.reasons.totalReturnPct ?? 'No account balance series.', pending: true },
+          { label: 'Annualized Return', value: 'Not available', note: a.reasons.annualizedReturnPct ?? 'Sample span too short for annualisation.', pending: true },
+          { label: 'Sortino Ratio', value: 'Not available', note: a.reasons.sortino ?? 'Standard Sortino requires periodic account returns.', pending: true },
+          { label: 'Calmar Ratio', value: 'Not available', note: a.reasons.calmar ?? 'Calmar requires account-currency total return and percent drawdown.', pending: true },
         ]}
       />
       <StatGrid
         title="Trade Quality"
-        note="R = 5.0 price terms"
+        note="R = PnL / 5.0 reference stop · sizing not validated"
         items={[
-          { label: 'Expectancy (R)', value: `${q.expectancyR.toFixed(2)}R`, note: 'Average PnL per trade in R units', tone: q.expectancyR < 0 ? 'bad' : 'good' },
-          { label: 'Average R Multiple', value: `${q.avgR.toFixed(2)}R`, note: 'Mean realized PnL divided by one R', tone: q.avgR < 0 ? 'bad' : 'good' },
-          { label: 'Average MAE', value: fmt(q.avgMAE), note: 'Mean worst adverse excursion while open' },
-          { label: 'Average MFE', value: fmt(q.avgMFE), note: 'Mean best favorable excursion while open' },
+          { label: 'Expectancy (R)', value: `${q.expectancyR.toFixed(2)}R`, note: 'Average PnL per trade in R units (price terms)', tone: q.expectancyR < 0 ? 'bad' : 'good' },
+          { label: 'Average R Multiple', value: `${q.avgR.toFixed(2)}R`, note: 'Mean realized PnL divided by one R (price terms)', tone: q.avgR < 0 ? 'bad' : 'good' },
+          { label: 'Average MAE', value: fmt(q.avgMAE), note: 'Mean worst adverse excursion while open · seeded replay path' },
+          { label: 'Average MFE', value: fmt(q.avgMFE), note: 'Mean best favorable excursion while open · seeded replay path' },
           { label: 'MFE Capture', value: `${q.mfeCapturePct.toFixed(2)}%`, note: 'Realized PnL as a share of total favorable excursion', tone: q.mfeCapturePct >= 0 ? 'good' : 'bad' },
         ]}
       />
@@ -404,8 +392,8 @@ export function DrawdownQuality({ rows }: { rows: readonly EnrichedTrade[] }) {
         items={[
           { label: 'Max Drawdown Duration', value: MINS(d.maxDurationMin), note: 'Longest stretch below a prior equity peak' },
           { label: 'Recovery Time', value: MINS(d.recoveryTimeMin), note: 'Deepest trough back to its prior peak' },
-          { label: 'Peak Equity Date', value: d.peakEquityTime ? STAMP(d.peakEquityTime) : '—', note: 'Equity peak preceding the deepest drawdown' },
-          { label: 'Deepest Trough', value: d.deepest ? STAMP(d.deepest.troughTime) : '—', note: 'Lowest equity point of the deepest period' },
+          { label: 'Peak Equity Date', value: d.peakEquityTime ? formatUtcMs(d.peakEquityTime) : '—', note: 'Equity peak preceding the deepest drawdown' },
+          { label: 'Deepest Trough', value: d.deepest ? formatUtcMs(d.deepest.troughTime) : '—', note: 'Lowest equity point of the deepest period' },
         ]}
       />
       <div className="stat-block">
@@ -423,9 +411,9 @@ export function DrawdownQuality({ rows }: { rows: readonly EnrichedTrade[] }) {
             <tbody>
               {d.periods.map((p, i) => (
                 <tr key={i}>
-                  <td>{STAMP(p.startTime)}</td>
-                  <td>{STAMP(p.troughTime)}</td>
-                  <td>{p.recoveredTime ? STAMP(p.recoveredTime) : 'Open'}</td>
+                  <td>{formatUtcMs(p.startTime)}</td>
+                  <td>{formatUtcMs(p.troughTime)}</td>
+                  <td>{p.recoveredTime ? formatUtcMs(p.recoveredTime) : 'Open'}</td>
                   <td className="bad-text">{fmt(p.depth)}</td>
                   <td>{MINS(p.lengthMs / 60000)}</td>
                   <td>{MINS(p.recoveryMs === null ? null : p.recoveryMs / 60000)}</td>
@@ -440,13 +428,13 @@ export function DrawdownQuality({ rows }: { rows: readonly EnrichedTrade[] }) {
 }
 
 /** How many strategy signals converted into executed trades. */
-export function SignalQuality({ rows }: { rows: readonly EnrichedTrade[] }) {
-  const s = useMemo(() => signalAnalysis(rows), [rows]);
+export function SignalQuality({ rows, totalSignals }: { rows: readonly EnrichedTrade[]; totalSignals?: number }) {
+  const s = useMemo(() => signalAnalysis(rows, totalSignals), [rows, totalSignals]);
   const pct = (v: number) => (s.totalSignals ? ((v / s.totalSignals) * 100).toFixed(2) : '0.00');
   return (
     <StatGrid
       title="Signal Execution"
-      note="one signal per M15 candle"
+      note="one signal per M15 candle · seeded"
       items={[
         { label: 'Total Signals', value: String(s.totalSignals), note: `100.00% · ${pct(s.totalSignals)}% of signals` },
         { label: 'Executed Signals', value: String(s.executed), note: `${pct(s.executed)}% of signals became trades`, tone: 'good' },
@@ -537,17 +525,39 @@ export function ExitQualityTable({ rows }: { rows: readonly EnrichedTrade[] }) {
   );
 }
 
-export function ResearchAnalytics({ rows }: { rows: readonly EnrichedTrade[] }) {
-  const p = useMemo(() => performance(rows), [rows]);
-  const r = useMemo(() => risk(rows), [rows]);
+export function ResearchAnalytics() {
+  const state = useRun();
+  const run = state.status === 'ready' ? state.run : null;
+  const rows = useMemo(() => run ? enrichRunTrades(run) : [], [run]);
+  const totalSignals = run?.dataQuality.candles ?? rows.length;
+  const p = useMemo(() => rows.length ? performance(rows) : { expectancy: 0, payoff: 0 }, [rows]);
+  const r = useMemo(() => rows.length ? risk(rows) : { maxLosingStreak: 0, recoveryFactor: 0 }, [rows]);
+
+  if (state.status !== 'ready') {
+    return (
+      <div className="panel">
+        <div className="panel-head">
+          <h2><BarChart3 size={16} />Research Analytics</h2>
+        </div>
+        <p className="report-note">
+          {state.status === 'loading'
+            ? 'Loading reference run…'
+            : state.status === 'error'
+              ? state.error
+              : state.message}
+        </p>
+      </div>
+    );
+  }
+
   return (
     <>
       <div className="research-kpis">
         {[
-          ['Expectancy', fmt(p.expectancy), 'Average expected PnL per trade based on historical results.'],
-          ['Payoff ratio', p.payoff.toFixed(2), 'Average win divided by average loss.'],
-          ['Max losing streak', String(r.maxLosingStreak), 'Longest run of consecutive losing trades.'],
-          ['Recovery factor', r.recoveryFactor.toFixed(2), 'Net PnL divided by maximum closed-trade drawdown.'],
+          ['Expectancy', fmt(p.expectancy), 'Average expected PnL per trade · price terms'],
+          ['Payoff ratio', p.payoff.toFixed(2), 'Average win divided by average loss · price terms'],
+          ['Max losing streak', String(r.maxLosingStreak), 'Longest run of consecutive losing trades'],
+          ['Recovery factor', r.recoveryFactor.toFixed(2), 'Net PnL divided by maximum closed-trade drawdown · price terms'],
         ].map(([label, value, note]) => (
           <div key={label}>
             <span>{label}</span>
@@ -575,7 +585,7 @@ export function ResearchAnalytics({ rows }: { rows: readonly EnrichedTrade[] }) 
         <DrawdownQuality rows={rows} />
       </Section>
       <Section icon={<LineChart size={16} />} title="Signal Analysis" note="generated vs executed">
-        <SignalQuality rows={rows} />
+        <SignalQuality rows={rows} totalSignals={totalSignals} />
       </Section>
       <Section icon={<BarChart3 size={16} />} title="Entry Analysis" note="entries by hour · UTC">
         <EntryQuality rows={rows} />
