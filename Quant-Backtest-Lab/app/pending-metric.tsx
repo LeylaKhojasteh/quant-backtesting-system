@@ -1,6 +1,6 @@
 'use client';
 
-import { Lock, CircleAlert, Clock, AlertTriangle } from 'lucide-react';
+import { Lock, Clock, AlertTriangle } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
 /**
