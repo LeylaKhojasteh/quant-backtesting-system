@@ -518,3 +518,9 @@
 .cmp-chart svg{width:100%;height:170px;display:block}
 .cmp-legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:6px;font-size:10.5px;color:var(--muted-foreground)}
 .cmp-legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:middle}
+.wf-summary{display:flex;flex-wrap:wrap;gap:8px 18px;margin:8px 0;padding:10px 12px;border:1px solid var(--border);border-radius:6px;background:var(--surface);font-size:11.5px;color:var(--muted-foreground)}
+.wf-summary b{color:var(--foreground);font-weight:500;margin-left:4px}
+.wf-chart{margin-top:10px;border:1px solid var(--border);border-radius:6px;padding:8px}
+.wf-chart svg{width:100%;height:180px;display:block}
+.wf-chart-legend{margin-top:6px;font-size:10.5px;color:var(--muted-foreground)}
+.wf-params{margin-top:4px}

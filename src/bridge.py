@@ -16,10 +16,13 @@ Endpoints::
     GET  /runs/<run_id>/report  -> the run's standalone report.html
     GET  /optimizations         -> optimization study history
     GET  /optimizations/<id>    -> a saved study (ranked results)
+    GET  /walkforwards          -> walk-forward study history
+    GET  /walkforwards/<id>     -> a saved walk-forward study (fold results)
     POST /runs                  -> execute one BacktestRunRequest, archive (+report/publish)
     POST /runs/<run_id>/publish -> publish an existing archived run (idempotent)
     POST /comparisons           -> compare 2..10 archived runs
     POST /optimizations         -> run a deterministic grid study (synchronous)
+    POST /walkforwards          -> run a deterministic walk-forward study (synchronous)
     POST /strategies/import     -> validate + store one local .py strategy
     DELETE /runs/<run_id>       -> delete a local run (+ public artifact/manifest)
     DELETE /strategies/<name>   -> delete an imported strategy file
@@ -50,6 +53,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src import run_errors  # noqa: E402
 from src import optimization, run_backtest, run_comparison, run_library, run_request  # noqa: E402
+from src import walk_forward  # noqa: E402
 from src import strategy_import, strategy_library, strategy_loader  # noqa: E402
 
 SERVICE = "quant-backtest-bridge"
@@ -244,6 +248,12 @@ class BridgeHandler(BaseHTTPRequestHandler):
             elif len(parts) == 2 and parts[0] == "optimizations":
                 self._send_json(200, {"study": optimization.load_study(
                     self._config["studies"], unquote(parts[1]))})
+            elif route == "/walkforwards":
+                self._send_json(200, {"walkforwards": walk_forward.list_walk_forwards(
+                    self._config["walkforwards"])})
+            elif len(parts) == 2 and parts[0] == "walkforwards":
+                self._send_json(200, {"walkforward": walk_forward.load_walk_forward(
+                    self._config["walkforwards"], unquote(parts[1]))})
             elif len(parts) == 2 and parts[0] == "runs":
                 self._send_json(200, {"run": run_library.run_detail(
                     self._config["runs"], unquote(parts[1]), self._config["public"])})
@@ -262,7 +272,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
         route = self.path.split("?", 1)[0].rstrip("/") or "/"
         parts = [p for p in route.split("/") if p]
         is_publish = len(parts) == 3 and parts[0] == "runs" and parts[2] == "publish"
-        if route not in ("/runs", "/strategies/import", "/comparisons", "/optimizations") and not is_publish:
+        if route not in ("/runs", "/strategies/import", "/comparisons", "/optimizations", "/walkforwards") and not is_publish:
             self._send_error(404, "not_found", f"unknown route: {route}")
             return
         try:
@@ -285,6 +295,14 @@ class BridgeHandler(BaseHTTPRequestHandler):
                     request, runs=self._config["runs"], studies=self._config["studies"],
                     public=self._config["public"])
                 self._send_json(200, {"study": study})
+                return
+            if route == "/walkforwards":
+                payload = self._read_json_body()
+                request = walk_forward.parse_walk_forward_payload(payload)
+                study = walk_forward.run_walk_forward(
+                    request, runs=self._config["runs"], studies=self._config["studies"],
+                    walkforwards=self._config["walkforwards"], public=self._config["public"])
+                self._send_json(200, {"walkforward": study})
                 return
             if is_publish:
                 info = run_library.publish_archived(
@@ -344,6 +362,7 @@ def create_server(
     strategy_dir: str | Path = DEFAULT_STRATEGY_DIR,
     data_dir: str | Path = DEFAULT_DATA_DIR,
     studies: str | Path = optimization.DEFAULT_STUDIES,
+    walkforwards: str | Path = walk_forward.DEFAULT_WALKFORWARDS,
 ) -> ThreadingHTTPServer:
     """Create (but do not start) a localhost bridge server.
 
@@ -356,6 +375,7 @@ def create_server(
         "strategy_dir": str(strategy_dir),
         "data_dir": str(data_dir),
         "studies": str(studies),
+        "walkforwards": str(walkforwards),
     }
     return server
 
@@ -373,6 +393,8 @@ def main(argv=None) -> int:
                         help="approved local market-data directory listed by GET /datasets")
     parser.add_argument("--studies", default=optimization.DEFAULT_STUDIES,
                         help="optimization study archive directory")
+    parser.add_argument("--walkforwards", default=walk_forward.DEFAULT_WALKFORWARDS,
+                        help="walk-forward study archive directory")
     args = parser.parse_args(argv)
 
     if args.host not in _LOCAL_HOSTS:
@@ -381,6 +403,7 @@ def main(argv=None) -> int:
     server = create_server(
         args.host, args.port, runs=args.runs, public=args.public,
         strategy_dir=args.strategy_dir, data_dir=args.data_dir, studies=args.studies,
+        walkforwards=args.walkforwards,
     )
     host, port = server.server_address[0], server.server_address[1]
     print(f"{SERVICE} {VERSION} listening on http://{host}:{port}")

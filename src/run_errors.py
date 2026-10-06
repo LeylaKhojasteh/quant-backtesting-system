@@ -126,3 +126,23 @@ class StudyNotFoundError(RunError):
 class InvalidStudyIdError(RunError):
     code = "invalid_study_id"
     http_status = 400
+
+
+class InvalidWalkForwardError(RunError):
+    code = "invalid_walk_forward"
+    http_status = 400
+
+
+class WalkForwardLimitError(RunError):
+    code = "walk_forward_limit_exceeded"
+    http_status = 400
+
+
+class WalkForwardNotFoundError(RunError):
+    code = "walk_forward_not_found"
+    http_status = 404
+
+
+class InvalidWalkForwardIdError(RunError):
+    code = "invalid_walk_forward_id"
+    http_status = 400

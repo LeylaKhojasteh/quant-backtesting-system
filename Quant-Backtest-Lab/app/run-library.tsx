@@ -10,6 +10,7 @@ import { useRunSource } from './run-context';
 import { useWorkspace } from './workspace-context';
 import { RunComparison } from './run-comparison';
 import { OptimizationPanel } from './optimization-panel';
+import { WalkForwardPanel } from './walk-forward-panel';
 import {
   BridgeError,
   deleteRun,
@@ -179,6 +180,7 @@ export function RunLibrary() {
               <TabsTrigger value="runs">Runs</TabsTrigger>
               <TabsTrigger value="compare">Compare</TabsTrigger>
               <TabsTrigger value="optimize">Optimize</TabsTrigger>
+              <TabsTrigger value="walkforward">Walk-Forward</TabsTrigger>
               <TabsTrigger value="strategies">Strategies</TabsTrigger>
             </TabsList>
           </Tabs>
@@ -288,6 +290,15 @@ export function RunLibrary() {
 
           {tab === 'optimize' && (
             <OptimizationPanel
+              onCompare={(ids) => {
+                setSelectedRuns(ids.slice(0, 5));
+                setTab('compare');
+              }}
+            />
+          )}
+
+          {tab === 'walkforward' && (
+            <WalkForwardPanel
               onCompare={(ids) => {
                 setSelectedRuns(ids.slice(0, 5));
                 setTab('compare');

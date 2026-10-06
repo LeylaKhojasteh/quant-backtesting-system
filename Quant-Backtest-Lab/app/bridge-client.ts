@@ -413,3 +413,128 @@ export async function getStudy(studyId: string, fetchImpl?: typeof fetch): Promi
   const data = await requestJson<{ study: Study }>(`/optimizations/${enc(studyId)}`, undefined, fetchImpl);
   return data.study;
 }
+
+export interface WalkForwardWindowPayload {
+  train_days: number;
+  test_days: number;
+  step_days: number;
+  mode: 'rolling' | 'anchored';
+}
+
+export interface WalkForwardPayload {
+  strategy: string;
+  market: { symbol: string; timeframe?: string; start?: string | null; end?: string | null; data_source: string };
+  execution: { stop_distance: number; take_profit_distance: number };
+  strategy_grid: Record<string, unknown[]>;
+  execution_grid: Record<string, number[]>;
+  objective: { metric: ObjectiveMetric; direction: 'maximize' | 'minimize' };
+  window: WalkForwardWindowPayload;
+  max_folds?: number;
+  max_candidates?: number;
+  max_total_candidates?: number;
+}
+
+export interface WalkForwardFoldMetrics {
+  total_trades: number;
+  wins: number;
+  losses: number;
+  win_rate: number;
+  net_pnl: number;
+  gross_profit: number;
+  gross_loss: number;
+  profit_factor: number | null;
+  max_drawdown: number;
+  expectancy: number;
+}
+
+export interface WalkForwardEquityPoint {
+  timestamp: string;
+  cumulative_pnl: number;
+}
+
+export interface WalkForwardFold {
+  index: number;
+  train_start: string;
+  train_end: string;
+  test_start: string;
+  test_end: string;
+  optimization_study_id: string | null;
+  selected_run_id: string | null;
+  selected_parameters: Record<string, unknown> | null;
+  training_objective_value: number | null;
+  test_run_id: string | null;
+  test_metrics: WalkForwardFoldMetrics | null;
+  equity: WalkForwardEquityPoint[];
+  status: 'ok' | 'train_failed' | 'test_failed' | 'pending';
+  failure: { code: string; message: string } | null;
+}
+
+export interface WalkForwardAggregate {
+  fold_count: number;
+  completed_folds: number;
+  total_oos_trades: number | null;
+  oos_wins: number | null;
+  oos_losses: number | null;
+  oos_win_rate: number | null;
+  total_oos_net_pnl: number | null;
+  average_fold_pnl: number | null;
+  profitable_folds: number | null;
+  profitable_fold_pct: number | null;
+  worst_fold_pnl: number | null;
+  best_fold_pnl: number | null;
+  oos_profit_factor: number | null;
+}
+
+export interface WalkForwardStudy {
+  wf_id: string;
+  created_at: string;
+  status: 'completed' | 'partial' | 'failed';
+  strategy: { selector: string; name: string; version: string };
+  dataset: { symbol: string; timeframe: string; start: string; end: string; data_source: string };
+  base: { parameters: Record<string, unknown>; execution: { stop_distance: number; take_profit_distance: number } };
+  window: WalkForwardWindowPayload;
+  objective: { metric: string; direction: string };
+  strategy_grid: Record<string, unknown[]>;
+  execution_grid: Record<string, number[]>;
+  candidates_per_fold: number;
+  fold_count: number;
+  folds: WalkForwardFold[];
+  aggregate: WalkForwardAggregate;
+}
+
+export interface WalkForwardSummary {
+  wf_id: string;
+  created_at: string;
+  status: string;
+  strategy: string;
+  fold_count: number;
+  objective: { metric?: string; direction?: string };
+  oos_net_pnl: number | null;
+  profitable_folds: number | null;
+}
+
+export async function startWalkForward(
+  payload: WalkForwardPayload,
+  fetchImpl?: typeof fetch,
+): Promise<WalkForwardStudy> {
+  const data = await requestJson<{ walkforward: WalkForwardStudy }>(
+    '/walkforwards',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+    fetchImpl,
+  );
+  return data.walkforward;
+}
+
+export async function listWalkForwards(fetchImpl?: typeof fetch): Promise<WalkForwardSummary[]> {
+  const data = await requestJson<{ walkforwards?: WalkForwardSummary[] }>('/walkforwards', undefined, fetchImpl);
+  return Array.isArray(data?.walkforwards) ? data.walkforwards : [];
+}
+
+export async function getWalkForward(wfId: string, fetchImpl?: typeof fetch): Promise<WalkForwardStudy> {
+  const data = await requestJson<{ walkforward: WalkForwardStudy }>(`/walkforwards/${enc(wfId)}`, undefined, fetchImpl);
+  return data.walkforward;
+}
