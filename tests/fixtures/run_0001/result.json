@@ -1,0 +1,235 @@
+{
+  "contract_version": "1.0",
+  "run_id": "run_0001",
+  "created_at": "2026-10-05T20:09:18.015008Z",
+  "strategy": {
+    "name": "Candle Direction",
+    "version": "1.0",
+    "description": "Close > Open -> LONG, Close < Open -> SHORT. Signal tradable after candle close."
+  },
+  "config": {
+    "symbol": "XAUUSD",
+    "timeframe": "15min",
+    "start": "2025-01-02T00:00:00.181000Z",
+    "end": "2025-01-02T23:59:58.749000Z",
+    "parameters": {
+      "timeframe": "15min",
+      "stop_distance": 5,
+      "take_profit_distance": 10
+    },
+    "data_source": "data\\XAUUSD_DUKAS_2025_01_ticks.csv",
+    "data_fingerprint": "sha256:e2b6fea64d7256f2b85ed67e130efd11c8b47481da3fde4a89528a3f8e8b6eba"
+  },
+  "trades": [
+    {
+      "trade_id": 1,
+      "direction": "LONG",
+      "signal_candle_start": "2025-01-02 00:00:00Z",
+      "signal_available_time": "2025-01-02 00:15:00Z",
+      "entry_time": "2025-01-02 00:15:01.267000Z",
+      "entry_price": 2626.08,
+      "stop_loss": 2621.08,
+      "take_profit": 2636.08,
+      "exit_time": "2025-01-02 02:23:14.960000Z",
+      "exit_price": 2636.1,
+      "exit_reason": "TP",
+      "pnl_price": 10.019999999999982,
+      "duration_seconds": 7693.693,
+      "spread_at_entry": 0.5499999999997272,
+      "spread_at_exit": 0.47000000000025466,
+      "mae": null,
+      "mfe": null
+    },
+    {
+      "trade_id": 2,
+      "direction": "LONG",
+      "signal_candle_start": "2025-01-02 02:15:00Z",
+      "signal_available_time": "2025-01-02 02:30:00Z",
+      "entry_time": "2025-01-02 02:30:00.206000Z",
+      "entry_price": 2636.01,
+      "stop_loss": 2631.01,
+      "take_profit": 2646.01,
+      "exit_time": "2025-01-02 04:45:49.876000Z",
+      "exit_price": 2631.01,
+      "exit_reason": "SL",
+      "pnl_price": -5.0,
+      "duration_seconds": 8149.67,
+      "spread_at_entry": 0.5100000000002183,
+      "spread_at_exit": 0.4399999999995998,
+      "mae": null,
+      "mfe": null
+    },
+    {
+      "trade_id": 3,
+      "direction": "LONG",
+      "signal_candle_start": "2025-01-02 04:45:00Z",
+      "signal_available_time": "2025-01-02 05:00:00Z",
+      "entry_time": "2025-01-02 05:00:00.134000Z",
+      "entry_price": 2634.18,
+      "stop_loss": 2629.18,
+      "take_profit": 2644.18,
+      "exit_time": "2025-01-02 10:21:58.429000Z",
+      "exit_price": 2644.25,
+      "exit_reason": "TP",
+      "pnl_price": 10.070000000000164,
+      "duration_seconds": 19318.295,
+      "spread_at_entry": 0.4299999999998363,
+      "spread_at_exit": 0.4899999999997817,
+      "mae": null,
+      "mfe": null
+    },
+    {
+      "trade_id": 4,
+      "direction": "LONG",
+      "signal_candle_start": "2025-01-02 10:15:00Z",
+      "signal_available_time": "2025-01-02 10:30:00Z",
+      "entry_time": "2025-01-02 10:30:00.033000Z",
+      "entry_price": 2645.03,
+      "stop_loss": 2640.03,
+      "take_profit": 2655.03,
+      "exit_time": "2025-01-02 13:13:00.592000Z",
+      "exit_price": 2640.03,
+      "exit_reason": "SL",
+      "pnl_price": -5.0,
+      "duration_seconds": 9780.559,
+      "spread_at_entry": 0.4600000000000364,
+      "spread_at_exit": 0.3999999999996362,
+      "mae": null,
+      "mfe": null
+    },
+    {
+      "trade_id": 5,
+      "direction": "SHORT",
+      "signal_candle_start": "2025-01-02 13:00:00Z",
+      "signal_available_time": "2025-01-02 13:15:00Z",
+      "entry_time": "2025-01-02 13:15:00.254000Z",
+      "entry_price": 2638.49,
+      "stop_loss": 2643.49,
+      "take_profit": 2628.49,
+      "exit_time": "2025-01-02 13:50:10.839000Z",
+      "exit_price": 2643.72,
+      "exit_reason": "SL",
+      "pnl_price": -5.230000000000018,
+      "duration_seconds": 2110.585,
+      "spread_at_entry": 0.4600000000000364,
+      "spread_at_exit": 0.45999999999958163,
+      "mae": null,
+      "mfe": null
+    },
+    {
+      "trade_id": 6,
+      "direction": "LONG",
+      "signal_candle_start": "2025-01-02 13:45:00Z",
+      "signal_available_time": "2025-01-02 14:00:00Z",
+      "entry_time": "2025-01-02 14:00:00.058000Z",
+      "entry_price": 2643.18,
+      "stop_loss": 2638.18,
+      "take_profit": 2653.18,
+      "exit_time": "2025-01-02 15:37:55.273000Z",
+      "exit_price": 2653.35,
+      "exit_reason": "TP",
+      "pnl_price": 10.170000000000073,
+      "duration_seconds": 5875.215,
+      "spread_at_entry": 0.4299999999998363,
+      "spread_at_exit": 0.24000000000023647,
+      "mae": null,
+      "mfe": null
+    },
+    {
+      "trade_id": 7,
+      "direction": "LONG",
+      "signal_candle_start": "2025-01-02 15:30:00Z",
+      "signal_available_time": "2025-01-02 15:45:00Z",
+      "entry_time": "2025-01-02 15:45:00.117000Z",
+      "entry_price": 2652.22,
+      "stop_loss": 2647.22,
+      "take_profit": 2662.22,
+      "exit_time": "2025-01-02 23:59:58.749000Z",
+      "exit_price": 2658.3,
+      "exit_reason": "EOD",
+      "pnl_price": 6.080000000000382,
+      "duration_seconds": 29698.632,
+      "spread_at_entry": 0.4399999999995998,
+      "spread_at_exit": 0.4600000000000364,
+      "mae": null,
+      "mfe": null
+    }
+  ],
+  "equity": [
+    {
+      "timestamp": "2025-01-02 02:23:14.960000Z",
+      "cumulative_pnl": 10.019999999999982,
+      "balance": null,
+      "equity": null
+    },
+    {
+      "timestamp": "2025-01-02 04:45:49.876000Z",
+      "cumulative_pnl": 5.019999999999982,
+      "balance": null,
+      "equity": null
+    },
+    {
+      "timestamp": "2025-01-02 10:21:58.429000Z",
+      "cumulative_pnl": 15.090000000000146,
+      "balance": null,
+      "equity": null
+    },
+    {
+      "timestamp": "2025-01-02 13:13:00.592000Z",
+      "cumulative_pnl": 10.090000000000146,
+      "balance": null,
+      "equity": null
+    },
+    {
+      "timestamp": "2025-01-02 13:50:10.839000Z",
+      "cumulative_pnl": 4.860000000000127,
+      "balance": null,
+      "equity": null
+    },
+    {
+      "timestamp": "2025-01-02 15:37:55.273000Z",
+      "cumulative_pnl": 15.0300000000002,
+      "balance": null,
+      "equity": null
+    },
+    {
+      "timestamp": "2025-01-02 23:59:58.749000Z",
+      "cumulative_pnl": 21.110000000000582,
+      "balance": null,
+      "equity": null
+    }
+  ],
+  "metrics": {
+    "total_trades": 7,
+    "wins": 4,
+    "losses": 3,
+    "breakeven": 0,
+    "win_rate": 57.14285714285714,
+    "net_pnl": 21.110000000000582,
+    "gross_profit": 36.3400000000006,
+    "gross_loss": -15.230000000000018,
+    "profit_factor": 2.3860801050558473,
+    "expectancy": 3.015714285714369,
+    "avg_win": 9.08500000000015,
+    "avg_loss": -5.076666666666672,
+    "max_drawdown": 10.230000000000018,
+    "avg_duration_seconds": 11803.806999999999
+  },
+  "data_quality": {
+    "data_source": "data\\XAUUSD_DUKAS_2025_01_ticks.csv",
+    "tick_count": 240867,
+    "candle_count": 92,
+    "validation": {
+      "signals_valid": true
+    },
+    "warnings": []
+  },
+  "execution": {
+    "engine": "src.backtest",
+    "started_at": "2026-10-05T20:09:17.694411Z",
+    "finished_at": "2026-10-05T20:09:18.013498Z",
+    "signals_received": 92,
+    "signals_executed": 7,
+    "signals_ignored": 85
+  }
+}

@@ -14,3 +14,16 @@ __pycache__/
 
 # Test build artifacts
 .test-build/
+
+# Generated research runs (local archive storage, not source).
+# Each run directory holds config.json, result.json, trades.csv,
+# equity.csv, report.html and strategy snapshots. These are
+# reproducible outputs of `python -m src.run_backtest`, not inputs,
+# and may be large — regenerate locally instead of committing them.
+# The committed exception is tests/fixtures/ (small deterministic
+# reference runs used by automated tests).
+runs/
+!runs/.gitkeep
+
+# Dev server logs
+.qbl-dev*.log

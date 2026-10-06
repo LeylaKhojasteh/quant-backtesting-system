@@ -7,6 +7,7 @@ import {Tooltip,TooltipProvider,TooltipTrigger,TooltipContent} from '@/component
 import {reportGroups,diagramNames,diagramData,reportContext,headline,headlineIsPending,type ReportMetric} from './report-data';
 import {fmt} from './demo';
 import {useRun,type RunState} from './run-context';
+import {PendingMetric} from './pending-metric';
 
 type DiagramPoint={label:string;x:number;v:number;n:number;positive?:number;negative?:number};
 
@@ -45,7 +46,7 @@ export function FullReport(){
    <div className="report-block" key={name}>
     <div className="report-block-head"><h3>{name}</h3><span>{items.length}</span></div>
     <TooltipProvider delayDuration={200}>
-     <dl className="report-kv">{items.map(m=><div className={m.pending?'is-pending':''} key={m.label}>
+     <dl className="report-kv">{items.map(m=>m.pending?<PendingMetric key={m.label} label={m.label} reason={m.note??'Not supplied by run.'} compact status="Pending" showLabel={false} className="report-pending"/>:<div key={m.label}>
       <dt>{m.label}{m.note&&<Tooltip><TooltipTrigger asChild><button className="help" aria-label={`About ${m.label}`}><Info size={11}/></button></TooltipTrigger><TooltipContent className="max-w-80">{m.note}</TooltipContent></Tooltip>}</dt>
       <dd>{m.value}</dd>
      </div>)}</dl>

@@ -5,9 +5,22 @@
 import { candles, trades, tradePath, type Trade } from './demo';
 import type { BacktestRun } from './schema';
 
+/** Seeded excursion values (demo replay path). Always concrete numbers. */
 export type Excursion = { mae: number; mfe: number; maeTime: number; mfeTime: number };
 
-export type EnrichedTrade = Trade & Excursion & { durationMin: number };
+/**
+ * Excursion fields on an enriched trade row. Archived engine runs that do not
+ * supply observed excursions carry null here — never a synthesized value and
+ * never a stand-in zero. Demo runs keep their seeded replay-path excursions.
+ */
+export type TradeExcursion = {
+  mae: number | null;
+  mfe: number | null;
+  maeTime: number | null;
+  mfeTime: number | null;
+};
+
+export type EnrichedTrade = Trade & TradeExcursion & { durationMin: number };
 
 /** Worst adverse and best favorable unrealized move while the trade was open. */
 export function excursions(t: Trade): Excursion {
@@ -45,6 +58,11 @@ export function enrich(list: readonly Trade[]): EnrichedTrade[] {
  * Rebuilds demo Trade records from a canonical BacktestRun's trades, so the
  * seeded replay path (MAE/MFE) and every derived statistic are computed from
  * the single run source instead of scattered fixtures.
+ *
+ * Excursion availability follows the run's data mode:
+ * - seeded demo: the seeded replay path supplies excursions (unchanged).
+ * - archived / live: the engine does not yet supply observed excursions, so
+ *   MAE/MFE stay null and are rendered N/A. They are never synthesized.
  */
 export function enrichRunTrades(run: BacktestRun): EnrichedTrade[] {
   const ordered = run.trades
@@ -64,7 +82,17 @@ export function enrichRunTrades(run: BacktestRun): EnrichedTrade[] {
       tp: t.tp ?? t.entry,
     }))
     .sort((a, b) => a.exitTime - b.exitTime);
-  return enrich(ordered);
+
+  if (run.dataMode === 'seeded-demo') return enrich(ordered);
+
+  return ordered.map((t) => ({
+    ...t,
+    mae: null,
+    mfe: null,
+    maeTime: null,
+    mfeTime: null,
+    durationMin: (t.exitTime - t.entryTime) / 60000,
+  }));
 }
 
 function round4(n: number) {
@@ -349,23 +377,31 @@ export type TradeQuality = {
   /** Expectancy expressed in R units (PnL divided by the reference stop). */
   expectancyR: number;
   avgR: number;
-  avgMAE: number;
-  avgMFE: number;
+  /** Null when no trade carries an observed adverse excursion. */
+  avgMAE: number | null;
+  /** Null when no trade carries an observed favorable excursion. */
+  avgMFE: number | null;
   /**
    * Realized PnL as a share of the best favorable excursion. Only meaningful
-   * for trades that reached a positive MFE.
+   * for trades that reached a positive MFE. Null when no observed MFE exists.
    */
-  mfeCapturePct: number;
+  mfeCapturePct: number | null;
 };
 
 export function tradeQuality(list: readonly EnrichedTrade[]): TradeQuality {
-  const withMfe = list.filter((t) => t.mfe > 0);
+  const maes = list.map((t) => t.mae).filter((v): v is number => v !== null);
+  const mfes = list.map((t) => t.mfe).filter((v): v is number => v !== null);
+  const withMfe = list.filter(
+    (t): t is EnrichedTrade & { mfe: number } => t.mfe !== null && t.mfe > 0,
+  );
   return {
     expectancyR: mean(list.map((t) => t.pnl / R_UNIT)),
     avgR: mean(list.map((t) => t.pnl / R_UNIT)),
-    avgMAE: mean(list.map((t) => t.mae)),
-    avgMFE: mean(list.map((t) => t.mfe)),
-    mfeCapturePct: withMfe.length ? (sum(withMfe.map((t) => t.pnl)) / sum(withMfe.map((t) => t.mfe))) * 100 : 0,
+    avgMAE: maes.length ? mean(maes) : null,
+    avgMFE: mfes.length ? mean(mfes) : null,
+    mfeCapturePct: withMfe.length
+      ? (sum(withMfe.map((t) => t.pnl)) / sum(withMfe.map((t) => t.mfe))) * 100
+      : null,
   };
 }
 

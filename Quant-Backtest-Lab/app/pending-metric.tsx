@@ -23,6 +23,8 @@ export type PendingMetricProps = {
   status?: 'Pending' | 'Not available';
   /** Short note rendered under the label in full mode. */
   note?: string;
+  /** Hide the repeated label (for table cells that already show it). Defaults to true. */
+  showLabel?: boolean;
 };
 
 const STATUS_CONFIG: Record<
@@ -57,6 +59,7 @@ export function PendingMetric({
   className = '',
   status = 'Pending',
   note,
+  showLabel = true,
 }: PendingMetricProps) {
   const cfg = STATUS_CONFIG[status];
   const Icon = cfg.icon;
@@ -70,7 +73,7 @@ export function PendingMetric({
           <span className="pm-compact-icon" style={{ color: cfg.color }} aria-hidden>
             <Icon size={12} />
           </span>
-          <span className="pm-compact-label">{label}</span>
+          {showLabel && <span className="pm-compact-label">{label}</span>}
           <Tooltip>
             <TooltipTrigger asChild>
               <span className="pm-compact-status" style={{ color: cfg.color }}>

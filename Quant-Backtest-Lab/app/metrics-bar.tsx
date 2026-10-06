@@ -4,6 +4,7 @@ import { Info } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { fmt } from './demo';
 import { useRun } from './run-context';
+import { PendingMetric } from './pending-metric';
 
 type Metric = {
   label: string;
@@ -11,11 +12,24 @@ type Metric = {
   note: string;
   tone?: 'good' | 'bad';
   pending?: boolean;
+  reason?: string | string[];
+  required?: string[];
 };
 
 const NOT_AVAILABLE = 'Not available';
 
 function Card({ m }: { m: Metric }) {
+  if (m.pending) {
+    return (
+      <PendingMetric
+        label={m.label}
+        reason={m.reason ?? m.note}
+        required={m.required}
+        compact
+        status="Pending"
+      />
+    );
+  }
   return (
     <div className={m.pending ? 'metric-pending' : undefined}>
       <span>
@@ -95,12 +109,16 @@ export function PerformanceMetricsBar({ aside }: { aside?: React.ReactNode }) {
           value: NOT_AVAILABLE,
           note: 'Standard Sharpe requires a valid account return series (periodic returns). Seven price-term trades are not a return series.',
           pending: true,
+          reason: 'Standard Sharpe requires a valid account return series (periodic returns). Seven price-term trades are not a return series.',
+          required: ['Account return series per period', 'Risk-free rate', 'Account currency'],
         },
         {
           label: 'Return %',
           value: NOT_AVAILABLE,
           note: `Return % requires an account-currency balance series. ${reasons[0]}`,
           pending: true,
+          reason: reasons,
+          required: ['Account currency', 'Balance series in account currency'],
         },
       ],
     },
@@ -133,6 +151,8 @@ export function PerformanceMetricsBar({ aside }: { aside?: React.ReactNode }) {
           value: NOT_AVAILABLE,
           note: `Balance requires an account currency and account-currency PnL. ${reasons[0]} Price PnL is never added to a base balance.`,
           pending: true,
+          reason: reasons,
+          required: ['Account currency', 'Initial balance', 'Account-currency PnL'],
         },
       ],
     },

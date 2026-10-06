@@ -75,6 +75,11 @@ export function TradeExplorer({
       if (typeof av === 'string' || typeof bv === 'string') {
         return String(av).localeCompare(String(bv)) * factor;
       }
+      // Unavailable excursions (null) sort last in either direction and are
+      // never coerced to zero for ordering.
+      if (av === null && bv === null) return 0;
+      if (av === null) return 1;
+      if (bv === null) return -1;
       return ((av as number) - (bv as number)) * factor;
     });
   }, [rows, query, direction, reason, sortKey, sortDir]);
@@ -200,7 +205,7 @@ export function TradeExplorer({
                       {t.reason}
                     </span>
                     <span className={'trade-row-pnl ' + (t.pnl > 0 ? 'good' : t.pnl < 0 ? 'bad' : '')}>{fmt(t.pnl)}</span>
-                    <span className="trade-row-meta">{time(t.entryTime)} UTC · MAE {fmt(t.mae)} · MFE {fmt(t.mfe)}</span>
+                    <span className="trade-row-meta">{time(t.entryTime)} UTC · MAE {t.mae === null ? 'N/A' : fmt(t.mae)} · MFE {t.mfe === null ? 'N/A' : fmt(t.mfe)}</span>
                   </button>
                 );
               })}

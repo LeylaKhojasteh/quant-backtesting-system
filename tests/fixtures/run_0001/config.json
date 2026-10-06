@@ -1,0 +1,20 @@
+{
+  "run_id": "run_0001",
+  "strategy": "candle_direction",
+  "strategy_metadata": {
+    "name": "Candle Direction",
+    "version": "1.0",
+    "description": "Close > Open -> LONG, Close < Open -> SHORT. Signal tradable after candle close."
+  },
+  "symbol": "XAUUSD",
+  "timeframe": "15min",
+  "data": "data\\XAUUSD_DUKAS_2025_01_ticks.csv",
+  "data_fingerprint": "sha256:e2b6fea64d7256f2b85ed67e130efd11c8b47481da3fde4a89528a3f8e8b6eba",
+  "start": "2025-01-02T00:00:00.181000Z",
+  "end": "2025-01-02T23:59:58.749000Z",
+  "parameters": {
+    "timeframe": "15min",
+    "stop_distance": 5,
+    "take_profit_distance": 10
+  }
+}

@@ -22,6 +22,7 @@ import {
 } from './analytics';
 import { useRun } from './run-context';
 import { formatUtc, formatUtcMs } from './utc';
+import { PendingMetric } from './pending-metric';
 
 const GREEN = 'var(--success)';
 const RED = 'var(--danger)';
@@ -317,14 +318,27 @@ export function RunIdentity() {
   );
 }
 
-export type Metric = { label: string; value: string; note: string; tone?: 'good' | 'bad'; pending?: boolean };
+export type Metric = { label: string; value: string; note: string; tone?: 'good' | 'bad'; pending?: boolean; required?: string[] };
 
-/** Compact labelled block used by the new research sections. */
-function Stat({ label, value, note, tone, pending }: Metric) {
+/** Compact labelled block used by the new research sections. Pending cells use the shared PendingMetric card. */
+function Stat({ label, value, note, tone, pending, required }: Metric & { required?: string[] }) {
+  if (pending) {
+    return (
+      <PendingMetric
+        label={label}
+        reason={note}
+        required={required}
+        compact
+        status="Pending"
+        showLabel={false}
+        className="stat-pending"
+      />
+    );
+  }
   return (
     <div className="stat-cell">
       <span>{label}</span>
-      <strong className={pending ? 'muted' : tone ? `${tone}-text` : undefined}>{value}</strong>
+      <strong className={tone ? `${tone}-text` : undefined}>{value}</strong>
       <small>{note}</small>
     </div>
   );
@@ -360,10 +374,10 @@ export function PerformanceQuality({ rows }: { rows: readonly EnrichedTrade[] })
         title="Return & Risk-Adjusted"
         note="account terms · not available for seeded demo"
         items={[
-          { label: 'Total Return', value: 'Not available', note: a.reasons.totalReturnPct ?? 'No account balance series.', pending: true },
-          { label: 'Annualized Return', value: 'Not available', note: a.reasons.annualizedReturnPct ?? 'Sample span too short for annualisation.', pending: true },
-          { label: 'Sortino Ratio', value: 'Not available', note: a.reasons.sortino ?? 'Standard Sortino requires periodic account returns.', pending: true },
-          { label: 'Calmar Ratio', value: 'Not available', note: a.reasons.calmar ?? 'Calmar requires account-currency total return and percent drawdown.', pending: true },
+          { label: 'Total Return', value: 'Not available', note: a.reasons.totalReturnPct ?? 'No account balance series.', pending: true, required: ['Account currency', 'Balance series in account currency'] },
+          { label: 'Annualized Return', value: 'Not available', note: a.reasons.annualizedReturnPct ?? 'Sample span too short for annualisation.', pending: true, required: ['Account return series', '>= 90 days and >= 30 observations'] },
+          { label: 'Sortino Ratio', value: 'Not available', note: a.reasons.sortino ?? 'Standard Sortino requires periodic account returns.', pending: true, required: ['Periodic account returns', 'Target return'] },
+          { label: 'Calmar Ratio', value: 'Not available', note: a.reasons.calmar ?? 'Calmar requires account-currency total return and percent drawdown.', pending: true, required: ['Account-currency total return', 'Account percent drawdown'] },
         ]}
       />
       <StatGrid
@@ -372,9 +386,34 @@ export function PerformanceQuality({ rows }: { rows: readonly EnrichedTrade[] })
         items={[
           { label: 'Expectancy (R)', value: `${q.expectancyR.toFixed(2)}R`, note: 'Average PnL per trade in R units (price terms)', tone: q.expectancyR < 0 ? 'bad' : 'good' },
           { label: 'Average R Multiple', value: `${q.avgR.toFixed(2)}R`, note: 'Mean realized PnL divided by one R (price terms)', tone: q.avgR < 0 ? 'bad' : 'good' },
-          { label: 'Average MAE', value: fmt(q.avgMAE), note: 'Mean worst adverse excursion while open · seeded replay path' },
-          { label: 'Average MFE', value: fmt(q.avgMFE), note: 'Mean best favorable excursion while open · seeded replay path' },
-          { label: 'MFE Capture', value: `${q.mfeCapturePct.toFixed(2)}%`, note: 'Realized PnL as a share of total favorable excursion', tone: q.mfeCapturePct >= 0 ? 'good' : 'bad' },
+          {
+            label: 'Average MAE',
+            value: q.avgMAE === null ? 'N/A' : fmt(q.avgMAE),
+            note: q.avgMAE === null
+              ? 'Not available — the engine run does not supply observed adverse excursions.'
+              : 'Mean worst adverse excursion while open · seeded replay path',
+            pending: q.avgMAE === null,
+            required: ['Observed MAE per trade from the engine'],
+          },
+          {
+            label: 'Average MFE',
+            value: q.avgMFE === null ? 'N/A' : fmt(q.avgMFE),
+            note: q.avgMFE === null
+              ? 'Not available — the engine run does not supply observed favorable excursions.'
+              : 'Mean best favorable excursion while open · seeded replay path',
+            pending: q.avgMFE === null,
+            required: ['Observed MFE per trade from the engine'],
+          },
+          {
+            label: 'MFE Capture',
+            value: q.mfeCapturePct === null ? 'N/A' : `${q.mfeCapturePct.toFixed(2)}%`,
+            note: q.mfeCapturePct === null
+              ? 'Not available — requires observed favorable excursions for every trade.'
+              : 'Realized PnL as a share of total favorable excursion',
+            pending: q.mfeCapturePct === null,
+            required: ['Observed MFE per trade from the engine'],
+            tone: (q.mfeCapturePct ?? 0) >= 0 ? 'good' : 'bad',
+          },
         ]}
       />
     </div>

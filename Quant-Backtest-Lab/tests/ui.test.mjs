@@ -154,4 +154,45 @@ test('DEMO badge exists in page.tsx', () => {
     const reportData = allFiles.get(path.join(appDir, 'report-data.ts')) || '';
     assert.ok(reportData.includes('stopDistance'));
   });
+
+  test('DataReadiness bar is mounted and never Verified/ready-green in demo', () => {
+    const readiness = allFiles.get(path.join(appDir, 'data-readiness.tsx')) || '';
+    const logic = allFiles.get(path.join(appDir, 'readiness.ts')) || readiness;
+    assert.ok(readiness.includes('DataReadinessBar'));
+    assert.ok(readiness.includes('useRun()'));
+    assert.ok(!logic.includes("'Verified'") && !logic.includes('"Verified"'));
+    assert.ok(logic.includes('Seeded demo'));
+    assert.ok(logic.includes('Not measured'));
+    assert.ok(logic.includes('Not connected'));
+    assert.ok(logic.includes('Visual preview only'));
+    const page = allFiles.get(path.join(appDir, 'page.tsx')) || '';
+    assert.ok(page.includes('<DataReadinessBar'));
+  });
+
+  test('Pending metrics use the shared PendingMetric component, never fake numbers', () => {
+    const pm = allFiles.get(path.join(appDir, 'pending-metric.tsx')) || '';
+    assert.ok(pm.includes('PendingMetric'));
+    assert.ok(pm.includes('Required for calculation'));
+    const metricsBar = allFiles.get(path.join(appDir, 'metrics-bar.tsx')) || '';
+    assert.ok(metricsBar.includes('PendingMetric'));
+    assert.ok(metricsBar.includes('accountUnavailableReasons') || metricsBar.includes('reasons'));
+    const analytics = allFiles.get(path.join(appDir, 'analytics-section.tsx')) || '';
+    assert.ok(analytics.includes('PendingMetric'));
+    const report = allFiles.get(path.join(appDir, 'report.tsx')) || '';
+    assert.ok(report.includes('PendingMetric'));
+  });
+
+  test('TradeTimeline renders TP/SL/EOD labels with UTC timestamps', () => {
+    const timeline = allFiles.get(path.join(appDir, 'trade-timeline.tsx')) || '';
+    const events = allFiles.get(path.join(appDir, 'timeline-events.ts')) || '';
+    assert.ok(timeline.includes('TradeTimeline'));
+    assert.ok(events.includes('tradeTimelineEvents'));
+    assert.ok(events.includes('Take profit') || events.includes('TP'));
+    assert.ok(events.includes('Stop loss') || events.includes('SL'));
+    assert.ok(events.includes('End of data') || events.includes('EOD'));
+    assert.ok(events.includes('UTC'));
+    assert.ok(events.includes('Not supplied by run'));
+    const page = allFiles.get(path.join(appDir, 'page.tsx')) || '';
+    assert.ok(page.includes('<TradeTimeline'));
+  });
 });

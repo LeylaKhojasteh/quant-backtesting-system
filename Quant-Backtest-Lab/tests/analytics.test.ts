@@ -6,6 +6,8 @@ import {
   advancedPerformance,
   tradingSpanMs,
   risk,
+  enrichRunTrades,
+  tradeQuality,
 } from '../app/analytics.js';
 import type { EnrichedTrade } from '../app/analytics.js';
 import { loadBacktestRun } from '../app/runner.js';
@@ -88,6 +90,44 @@ describe('analytics.ts - financial calculations', () => {
     ];
     const span = tradingSpanMs(mockTrades as unknown as EnrichedTrade[]);
     assert.equal(span, 5000); // 5000 - 0 = 5000
+  });
+});
+
+describe('analytics.ts - excursion availability', () => {
+  test('archived (live) runs keep MAE/MFE null and never synthesize them', async () => {
+    const result = await loadBacktestRun();
+    assert.ok(result.ok);
+    if (!result.ok) return;
+    const archived = { ...result.run, dataMode: 'live' as const };
+    const rows = enrichRunTrades(archived);
+    assert.ok(rows.length > 0);
+    for (const t of rows) {
+      assert.equal(t.mae, null, `trade ${t.id} MAE must stay null`);
+      assert.equal(t.mfe, null, `trade ${t.id} MFE must stay null`);
+      assert.equal(t.maeTime, null);
+      assert.equal(t.mfeTime, null);
+      assert.equal(typeof t.durationMin, 'number');
+    }
+    const q = tradeQuality(rows);
+    assert.equal(q.avgMAE, null);
+    assert.equal(q.avgMFE, null);
+    assert.equal(q.mfeCapturePct, null);
+  });
+
+  test('demo runs keep the seeded excursion path unchanged', async () => {
+    const result = await loadBacktestRun();
+    assert.ok(result.ok);
+    if (!result.ok) return;
+    const rows = enrichRunTrades(result.run);
+    assert.ok(rows.length > 0);
+    for (const t of rows) {
+      assert.equal(typeof t.mae, 'number');
+      assert.equal(typeof t.mfe, 'number');
+    }
+    const q = tradeQuality(rows);
+    assert.equal(typeof q.avgMAE, 'number');
+    assert.equal(typeof q.avgMFE, 'number');
+    assert.equal(typeof q.mfeCapturePct, 'number');
   });
 });
 

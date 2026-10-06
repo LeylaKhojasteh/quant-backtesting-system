@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { RunProvider } from "./run-context";
+import { BridgeProvider } from "./bridge-status";
+import { WorkspaceProvider } from "./workspace-context";
 
 export const metadata: Metadata = {
   title: "Quant Backtest Lab",
@@ -22,7 +24,11 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <body className="antialiased">
-        <RunProvider>{children}</RunProvider>
+        <RunProvider>
+          <BridgeProvider>
+            <WorkspaceProvider>{children}</WorkspaceProvider>
+          </BridgeProvider>
+        </RunProvider>
       </body>
     </html>
   );

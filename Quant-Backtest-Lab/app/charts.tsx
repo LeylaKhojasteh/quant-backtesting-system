@@ -6,6 +6,7 @@ import { candles, fmt, time, ticks, tradePath, trades, type Candle, type Trade }
 import { excursions } from './analytics';
 import { useRun } from './run-context';
 import { formatUtc, formatUtcMs } from './utc';
+import { PendingMetric } from './pending-metric';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
 const green = 'var(--success)';
@@ -529,7 +530,7 @@ export function CandleChart({
   );
 }
 
-export function TickChart({ trade, view }: { trade: Trade; view: string }) {
+export function TickChart({ trade, view, excursionAvailable = true }: { trade: Trade; view: string; excursionAvailable?: boolean }) {
   const [hover, setHover] = useState<number | null>(null);
   const { ref, width, height, ready } = useElementSize();
 
@@ -632,8 +633,8 @@ export function TickChart({ trade, view }: { trade: Trade; view: string }) {
               </>
             )}
 
-            {/* MAE / MFE extremes on the seeded replay path */}
-            {full && (() => {
+            {/* MAE / MFE extremes on the seeded replay path (demo runs only) */}
+            {full && excursionAvailable && (() => {
               const ex = excursions(trade);
               const idxOf = (ms: number) =>
                 Math.max(0, Math.min(arr.length - 1, Math.round(((ms - trade.entryTime) / Math.max(1, trade.exitTime - trade.entryTime)) * (arr.length - 1))));
@@ -693,7 +694,9 @@ export function TickChart({ trade, view }: { trade: Trade; view: string }) {
         <span><i style={{ background: blue }} />BID</span>
         <span><i style={{ background: 'var(--warning)' }} />ASK</span>
         <span className="chart-hint">
-          {full ? 'Sampled replay · MAE / MFE derived from this path' : '±30 seconds · UTC'}
+          {full ? (excursionAvailable
+            ? 'Sampled replay · MAE / MFE derived from this path'
+            : 'MAE / MFE not supplied by this run') : '±30 seconds · UTC'}
         </span>
       </div>
       {full && <p className="demo-note">Seeded visualization only; no execution engine runs in this prototype.</p>}
@@ -746,15 +749,13 @@ export function Equity({ mode }: { mode: string }) {
         <svg ref={ref} role="img" aria-label="Balance chart unavailable"></svg>
         <div className="equity-empty">
           <h3>Balance — Not available</h3>
-          <p>
-            A balance chart requires a valid account model. The seeded demo produces PnL in price
-            terms only; price PnL is never added to an assumed base balance.
-          </p>
-          <ul>
-            {(run.metrics.accountUnavailableReasons ?? []).map((r) => (
-              <li key={r}>{r}</li>
-            ))}
-          </ul>
+          <PendingMetric
+            label="Balance"
+            reason={run.metrics.accountUnavailableReasons ?? ['No account model configured.']}
+            required={['Account currency', 'Initial balance', 'Account-currency PnL']}
+            status="Not available"
+            note="A balance chart requires a valid account model. The seeded demo produces PnL in price terms only; price PnL is never added to an assumed base balance."
+          />
         </div>
       </div>
     );
