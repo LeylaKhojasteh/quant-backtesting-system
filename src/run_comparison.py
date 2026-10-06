@@ -56,6 +56,12 @@ def _comparison_entry(runs_dir, run_id, public_dir) -> dict:
     quality = result.get("data_quality") or {}
     dq_status = "measured" if quality.get("tick_count") is not None else "unavailable"
 
+    account = result.get("account") or {}
+    account_ready = bool(account.get("available"))
+    account_metrics = account.get("metrics") or {}
+    account_model = account.get("model") or {}
+    account_instrument = account.get("instrument") or {}
+
     return {
         "run_id": run_id,
         "created_at": detail.get("created_at"),
@@ -80,6 +86,14 @@ def _comparison_entry(runs_dir, run_id, public_dir) -> dict:
         "max_drawdown": metrics.get("max_drawdown"),
         "expectancy": metrics.get("expectancy"),
         "data_quality_status": dq_status,
+        "account_ready": account_ready,
+        "account_currency": account.get("account_currency") if account_ready else None,
+        "account_net_pnl": account_metrics.get("net_pnl") if account_ready else None,
+        "account_return_pct": account_metrics.get("total_return_pct") if account_ready else None,
+        "account_commission": account_metrics.get("total_commission") if account_ready else None,
+        "account_max_drawdown": account_metrics.get("max_drawdown") if account_ready else None,
+        "account_position_size_lots": account_model.get("position_size_lots") if account_ready else None,
+        "account_contract_size": account_instrument.get("contract_size") if account_ready else None,
         "equity": _downsample(cumulative),
     }
 
@@ -130,11 +144,46 @@ def compare_runs(runs_dir, public_dir, run_ids) -> dict:
         "return comparison is shown."
     )
 
+    ready_flags = {e["account_ready"] for e in entries}
+    account_currencies = {e["account_currency"] for e in entries if e["account_ready"]}
+    account_positions = {e["account_position_size_lots"] for e in entries if e["account_ready"]}
+    account_contracts = {e["account_contract_size"] for e in entries if e["account_ready"]}
+    all_account_ready = ready_flags == {True}
+    any_account_ready = True in ready_flags
+
+    if any_account_ready and not all_account_ready:
+        warnings.append(
+            "Some runs use an account model and others do not; account-level PnL is not "
+            "comparable across these runs."
+        )
+    elif all_account_ready:
+        if len(account_currencies) > 1:
+            warnings.append(
+                f"Account currencies differ ({', '.join(sorted(str(c) for c in account_currencies))}); "
+                "raw account PnL is not normalized across currencies."
+            )
+        if len(account_positions) > 1:
+            warnings.append(
+                f"Position sizes differ ({', '.join(sorted(str(p) for p in account_positions))} lots); "
+                "raw account PnL is not directly comparable."
+            )
+        if len(account_contracts) > 1:
+            warnings.append(
+                f"Instrument contract sizes differ ({', '.join(sorted(str(c) for c in account_contracts))}); "
+                "raw account PnL is not directly comparable."
+            )
+
     difficulty = {
         "symbol": len(symbols) > 1,
         "timeframe": len(timeframes) > 1,
         "date_range": len(ranges) > 1,
         "strategy": len(strategies) > 1,
+        "account_currency": len(account_currencies) > 1,
+        "account_model": any_account_ready and not all_account_ready,
+        "account_comparable": all_account_ready
+        and len(account_currencies) <= 1
+        and len(account_positions) <= 1
+        and len(account_contracts) <= 1,
     }
 
     equity = {e["run_id"]: e.pop("equity") for e in entries}

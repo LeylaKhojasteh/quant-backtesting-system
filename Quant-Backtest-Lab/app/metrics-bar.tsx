@@ -4,6 +4,7 @@ import { Info } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { fmt } from './demo';
 import { useRun } from './run-context';
+import { accountDrawdown } from './analytics';
 import { PendingMetric } from './pending-metric';
 
 type Metric = {
@@ -89,6 +90,45 @@ export function PerformanceMetricsBar({ aside }: { aside?: React.ReactNode }) {
   const reasons = p.accountUnavailableReasons ?? ['No account model configured.'];
   const volatility = stdev(pnls);
 
+  // Account terms are present only when the account model is ready.
+  const accountReady = run.account.accountReady === true;
+  const balances = accountReady
+    ? run.equity.map((e) => e.balance).filter((v): v is number => v !== null && v !== undefined)
+    : [];
+  const acctNet = accountReady ? t.reduce((a, x) => a + (x.pnlCurrency ?? 0), 0) : null;
+  const acctCommission = accountReady ? t.reduce((a, x) => a + (x.commission ?? 0), 0) : null;
+  const endingBalance = accountReady
+    ? balances.length
+      ? balances[balances.length - 1]
+      : run.account.initialBalance != null && acctNet != null
+        ? run.account.initialBalance + acctNet
+        : null
+    : null;
+  const dd = accountReady ? accountDrawdown(balances) : null;
+
+  const returnItem: Metric =
+    accountReady && p.returnPct !== null && p.returnPct !== undefined
+      ? { label: 'Return %', value: `${p.returnPct.toFixed(2)}%`, note: `Total account return · ${run.account.currency ?? ''}`, tone: p.returnPct < 0 ? 'bad' : 'good' }
+      : {
+          label: 'Return %',
+          value: NOT_AVAILABLE,
+          note: `Return % requires an account-currency balance series. ${reasons[0]}`,
+          pending: true,
+          reason: reasons,
+          required: ['Account currency', 'Balance series in account currency'],
+        };
+  const balanceItem: Metric =
+    accountReady && endingBalance !== null
+      ? { label: 'Balance', value: fmt(endingBalance), note: `Ending realized balance · ${run.account.currency ?? ''}` }
+      : {
+          label: 'Balance',
+          value: NOT_AVAILABLE,
+          note: `Balance requires an account currency and account-currency PnL. ${reasons[0]} Price PnL is never added to a base balance.`,
+          pending: true,
+          reason: reasons,
+          required: ['Account currency', 'Initial balance', 'Account-currency PnL'],
+        };
+
   const groups: { title: string; items: Metric[] }[] = [
     {
       title: 'Performance',
@@ -112,14 +152,22 @@ export function PerformanceMetricsBar({ aside }: { aside?: React.ReactNode }) {
           reason: 'Standard Sharpe requires a valid account return series (periodic returns). Seven price-term trades are not a return series.',
           required: ['Account return series per period', 'Risk-free rate', 'Account currency'],
         },
-        {
-          label: 'Return %',
-          value: NOT_AVAILABLE,
-          note: `Return % requires an account-currency balance series. ${reasons[0]}`,
-          pending: true,
-          reason: reasons,
-          required: ['Account currency', 'Balance series in account currency'],
-        },
+        returnItem,
+        ...(accountReady
+          ? [
+              {
+                label: 'Net Account PnL',
+                value: fmt(acctNet ?? 0),
+                note: `Realized account PnL · ${run.account.currency ?? ''} (after commission)`,
+                tone: (acctNet ?? 0) < 0 ? 'bad' as const : 'good' as const,
+              },
+              {
+                label: 'Commission',
+                value: fmt(acctCommission ?? 0),
+                note: `Total round-turn commission · ${run.account.currency ?? ''}`,
+              },
+            ]
+          : []),
       ],
     },
     {
@@ -134,6 +182,16 @@ export function PerformanceMetricsBar({ aside }: { aside?: React.ReactNode }) {
           value: volatility.toFixed(2),
           note: 'Standard deviation of per-trade PnL · price terms',
         },
+        ...(accountReady && dd
+          ? [
+              {
+                label: 'Realized DD',
+                value: dd.maxDrawdown !== null ? fmt(dd.maxDrawdown) : NOT_AVAILABLE,
+                note: `Max realized-balance drawdown${dd.maxDrawdownPct !== null ? ` · ${dd.maxDrawdownPct.toFixed(2)}%` : ''} · account currency`,
+                tone: 'bad' as const,
+              },
+            ]
+          : []),
       ],
     },
     {
@@ -146,14 +204,7 @@ export function PerformanceMetricsBar({ aside }: { aside?: React.ReactNode }) {
         { label: 'Best Trade', value: fmt(Math.max(...pnls)), note: 'Largest single-trade PnL · price terms', tone: 'good' },
         { label: 'Worst Trade', value: fmt(Math.min(...pnls)), note: 'Largest single-trade loss · price terms', tone: 'bad' },
         { label: 'Avg Duration', value: `${(p.avgDurationMin ?? 0).toFixed(0)} min`, note: 'Mean time in trade, entry to exit · UTC' },
-        {
-          label: 'Balance',
-          value: NOT_AVAILABLE,
-          note: `Balance requires an account currency and account-currency PnL. ${reasons[0]} Price PnL is never added to a base balance.`,
-          pending: true,
-          reason: reasons,
-          required: ['Account currency', 'Initial balance', 'Account-currency PnL'],
-        },
+        balanceItem,
       ],
     },
   ];

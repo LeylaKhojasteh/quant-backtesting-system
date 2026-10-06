@@ -249,6 +249,12 @@ export function RunLibrary() {
                         <span>PnL <b className={(run.net_pnl ?? 0) >= 0 ? 'good-text' : 'bad-text'}>{fmtNum(run.net_pnl)}</b></span>
                         <span>Win <b>{run.win_rate === null || run.win_rate === undefined ? '—' : `${fmtNum(run.win_rate)}%`}</b></span>
                         <span>PF <b>{fmtNum(run.profit_factor)}</b></span>
+                        {run.account_ready && (
+                          <>
+                            <span>Acct <b className={(run.account_net_pnl ?? 0) >= 0 ? 'good-text' : 'bad-text'}>{fmtNum(run.account_net_pnl)} {run.account_currency ?? ''}</b></span>
+                            <span>Return <b>{run.account_return_pct == null ? '—' : `${fmtNum(run.account_return_pct)}%`}</b></span>
+                          </>
+                        )}
                       </div>
                     </div>
                     {confirmId === run.run_id ? (

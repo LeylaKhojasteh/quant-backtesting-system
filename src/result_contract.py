@@ -153,6 +153,10 @@ class BacktestResult:
     metrics: Metrics
     data_quality: DataQuality
     execution: ExecutionInfo
+    #: Optional account/economics report (see ``src.accounting``). ``None`` for
+    #: price-term-only runs and for every archive written before this field
+    #: existed. Never affects the authoritative price-term fields above.
+    account: dict | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -173,6 +177,7 @@ class BacktestResult:
             metrics=Metrics(**data["metrics"]),
             data_quality=DataQuality(**data["data_quality"]),
             execution=ExecutionInfo(**data["execution"]),
+            account=data.get("account"),
         )
 
     @classmethod

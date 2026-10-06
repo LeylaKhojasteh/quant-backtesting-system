@@ -44,6 +44,20 @@ export interface DatasetInfo {
   bytes: number;
 }
 
+export interface AccountPayload {
+  account_currency: string;
+  starting_balance: number;
+  position_size_lots: number;
+  commission_per_lot_round_turn: number;
+}
+
+export interface InstrumentPayload {
+  symbol: string;
+  quote_currency: string;
+  contract_size: number;
+  tick_size?: number | null;
+}
+
 export interface BacktestRunRequestPayload {
   strategy: { selector: string; parameters?: Record<string, unknown> };
   market: {
@@ -54,6 +68,10 @@ export interface BacktestRunRequestPayload {
     data_source: string;
   };
   execution?: { stop_distance?: number; take_profit_distance?: number };
+  /** Optional account model. Omit for a price-term-only run (unchanged). */
+  account?: AccountPayload;
+  /** Optional explicit instrument economics; falls back to the catalog. */
+  instrument?: InstrumentPayload;
   publish?: boolean;
 }
 
@@ -153,6 +171,22 @@ export async function listDatasets(fetchImpl?: typeof fetch): Promise<DatasetInf
   return Array.isArray(data?.datasets) ? data.datasets : [];
 }
 
+export interface InstrumentInfo {
+  symbol: string;
+  quote_currency: string;
+  contract_size: number;
+  tick_size: number | null;
+}
+
+export async function listInstruments(fetchImpl?: typeof fetch): Promise<InstrumentInfo[]> {
+  const data = await requestJson<{ instruments?: InstrumentInfo[] }>(
+    '/instruments',
+    undefined,
+    fetchImpl,
+  );
+  return Array.isArray(data?.instruments) ? data.instruments : [];
+}
+
 export async function submitRun(
   payload: BacktestRunRequestPayload,
   fetchImpl?: typeof fetch,
@@ -204,6 +238,10 @@ export interface RunLibrarySummary {
   win_rate: number | null;
   net_pnl: number | null;
   profit_factor: number | null;
+  account_ready: boolean;
+  account_currency: string | null;
+  account_net_pnl: number | null;
+  account_return_pct: number | null;
   report: boolean;
   published: boolean;
 }
@@ -223,6 +261,8 @@ export interface RunDetail extends RunLibrarySummary {
   };
   selector: string | null;
   file: string | null;
+  account: AccountPayload | null;
+  instrument: InstrumentPayload | null;
 }
 
 export interface DeleteRunResult {
@@ -300,12 +340,28 @@ export interface ComparisonRun {
   max_drawdown: number | null;
   expectancy: number | null;
   data_quality_status: string;
+  account_ready: boolean;
+  account_currency: string | null;
+  account_net_pnl: number | null;
+  account_return_pct: number | null;
+  account_commission: number | null;
+  account_max_drawdown: number | null;
+  account_position_size_lots: number | null;
+  account_contract_size: number | null;
 }
 
 export interface ComparisonResult {
   runs: ComparisonRun[];
   warnings: string[];
-  differences: { symbol: boolean; timeframe: boolean; date_range: boolean; strategy: boolean };
+  differences: {
+    symbol: boolean;
+    timeframe: boolean;
+    date_range: boolean;
+    strategy: boolean;
+    account_currency: boolean;
+    account_model: boolean;
+    account_comparable: boolean;
+  };
   equity: Record<string, number[]>;
   units: string;
 }

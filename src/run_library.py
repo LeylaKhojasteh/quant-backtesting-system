@@ -83,6 +83,9 @@ def run_summary(runs_dir: str | Path, run_id: str, public_dir: str | Path) -> di
     metrics = result.get("metrics") or {}
     strategy = result.get("strategy") or {}
     conf = result.get("config") or {}
+    account = result.get("account") or {}
+    account_ready = bool(account.get("available"))
+    account_metrics = account.get("metrics") or {}
     selector, file = _strategy_fields(config)
     return {
         "run_id": run_id,
@@ -98,6 +101,10 @@ def run_summary(runs_dir: str | Path, run_id: str, public_dir: str | Path) -> di
         "win_rate": metrics.get("win_rate"),
         "net_pnl": metrics.get("net_pnl"),
         "profit_factor": metrics.get("profit_factor"),
+        "account_ready": account_ready,
+        "account_currency": account.get("account_currency") if account else None,
+        "account_net_pnl": account_metrics.get("net_pnl") if account_ready else None,
+        "account_return_pct": account_metrics.get("total_return_pct") if account_ready else None,
         "report": (directory / "report.html").is_file(),
         "published": is_published(run_id, public_dir),
     }
@@ -168,6 +175,8 @@ def run_detail(runs_dir: str | Path, run_id: str, public_dir: str | Path) -> dic
             },
             "selector": selector,
             "file": file,
+            "account": config.get("account"),
+            "instrument": config.get("instrument"),
         }
     )
     return detail

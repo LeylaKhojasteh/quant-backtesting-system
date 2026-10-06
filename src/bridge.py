@@ -11,6 +11,7 @@ Endpoints::
     GET  /health                -> {"status": "ok", "service": ..., "version": ...}
     GET  /strategies            -> trusted strategy catalog (metadata + parameters)
     GET  /datasets              -> approved local market-data catalog (metadata only)
+    GET  /instruments           -> instrument economics catalog (contract size, quote currency)
     GET  /runs                  -> Run Library summaries (published + local)
     GET  /runs/<run_id>         -> run detail + archived configuration
     GET  /runs/<run_id>/report  -> the run's standalone report.html
@@ -54,6 +55,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src import run_errors  # noqa: E402
 from src import optimization, run_backtest, run_comparison, run_library, run_request  # noqa: E402
 from src import walk_forward  # noqa: E402
+from src import accounting  # noqa: E402
 from src import strategy_import, strategy_library, strategy_loader  # noqa: E402
 
 SERVICE = "quant-backtest-bridge"
@@ -240,6 +242,8 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 self._send_json(200, {"strategies": list_strategies(self._config["strategy_dir"])})
             elif route == "/datasets":
                 self._send_json(200, {"datasets": list_datasets(self._config["data_dir"])})
+            elif route == "/instruments":
+                self._send_json(200, {"instruments": accounting.instrument_catalog()})
             elif route == "/runs":
                 self._send_json(200, {"runs": run_library.list_summaries(
                     self._config["runs"], self._config["public"])})

@@ -108,6 +108,10 @@ class WalkForwardRequest:
     max_folds: int = DEFAULT_MAX_FOLDS
     max_candidates: int = optimization.DEFAULT_MAX_CANDIDATES
     max_total_candidates: int = DEFAULT_MAX_TOTAL_CANDIDATES
+    #: Optional account/instrument settings carried through to every training
+    #: candidate and OOS test run. ``None`` keeps them price-term only.
+    account: "run_request.AccountModel | None" = None
+    instrument: "run_request.InstrumentSpec | None" = None
 
 
 def _positive_int(name: str, value) -> int:
@@ -123,6 +127,7 @@ def parse_walk_forward_payload(payload) -> WalkForwardRequest:
     allowed = {
         "strategy", "market", "execution", "strategy_grid", "execution_grid",
         "objective", "window", "max_folds", "max_candidates", "max_total_candidates",
+        "account", "instrument",
     }
     unknown = sorted(set(payload) - allowed)
     if unknown:
@@ -199,6 +204,8 @@ def parse_walk_forward_payload(payload) -> WalkForwardRequest:
         max_folds=min(max_folds, HARD_MAX_FOLDS),
         max_candidates=min(max_candidates, optimization.HARD_MAX_CANDIDATES),
         max_total_candidates=min(max_total, HARD_MAX_TOTAL_CANDIDATES),
+        account=run_request.parse_account(payload.get("account")),
+        instrument=run_request.parse_instrument(payload.get("instrument")),
     )
 
 
@@ -278,6 +285,8 @@ def build_study_plan(request: WalkForwardRequest, declared: dict) -> tuple[list[
         execution_grid=request.execution_grid,
         objective=request.objective,
         max_candidates=request.max_candidates,
+        account=request.account,
+        instrument=request.instrument,
     )
     combos = optimization.build_combinations(opt_request, declared)
     folds = generate_folds(request.market.start, request.market.end, request.window)
@@ -422,6 +431,8 @@ def run_walk_forward(
                 stop_distance=request.execution.stop_distance,
                 take_profit_distance=request.execution.take_profit_distance,
             ),
+            account=request.account,
+            instrument=request.instrument,
             publish=False,  # OOS runs stay local (Task 17)
         )
         try:

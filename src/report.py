@@ -22,6 +22,8 @@ ARCHIVE_FILES = ("config.json", "result.json", "trades.csv",
 
 ACCOUNT_ONLY = ("Balance", "Return %", "Sharpe", "Sortino",
                 "Calmar", "Annualized return")
+#: Unsupported in v1 even when an account model exists — must stay Pending.
+ACCOUNT_UNSUPPORTED = ("Sharpe", "Sortino", "Calmar", "Annualized return")
 
 
 def _esc(v: object) -> str:
@@ -121,7 +123,7 @@ CSS = (""
 ".scroll{overflow-x:auto}")
 
 
-def _rows(trades: list) -> str:
+def _rows(trades: list, acmap: dict | None = None) -> str:
     out = []
     for t in trades:
         p = float(t.get("pnl_price", 0.0) or 0.0)
@@ -130,14 +132,29 @@ def _rows(trades: list) -> str:
                  _esc(t.get("signal_available_time")), _esc(t.get("entry_time")),
                  _num(t.get("entry_price")), _esc(t.get("exit_time")),
                  _num(t.get("exit_price")), _esc(t.get("exit_reason"))]
-        out.append("<tr><td>" + "</td><td>".join(cells)
-                   + f'</td><td class="{c}">{_num(p)}</td>'
-                   + f"<td>{_dur(t.get('duration_seconds'))}</td>"
-                   + f"<td>{_num(t.get('mae'))}</td><td>{_num(t.get('mfe'))}</td></tr>")
+        row = ("<tr><td>" + "</td><td>".join(cells)
+               + f'</td><td class="{c}">{_num(p)}</td>'
+               + f"<td>{_dur(t.get('duration_seconds'))}</td>"
+               + f"<td>{_num(t.get('mae'))}</td><td>{_num(t.get('mfe'))}</td>")
+        if acmap is not None:
+            a = acmap.get(int(t.get("trade_id") or 0), {})
+            net = a.get("net_account_pnl")
+            nc = "good" if (net or 0) > 0 else ("bad" if (net or 0) < 0 else "")
+            row += (f"<td>{_num(a.get('gross_account_pnl'))}</td>"
+                    f"<td>{_num(a.get('commission'))}</td>"
+                    f'<td class="{nc}">{_num(net)}</td>')
+        out.append(row + "</tr>")
     return "\n".join(out)
 
 
-def _perf(me: dict, trades: list):
+def _account_lookup(account: dict | None) -> dict | None:
+    """Trade-id -> account row map, or None when no account model is available."""
+    if not account or not account.get("available"):
+        return None
+    return {int(r.get("trade_id", 0)): r for r in (account.get("trades") or [])}
+
+
+def _perf(me: dict, trades: list, account_available: bool = False):
     longs = sum(1 for t in trades if t.get("direction") == "LONG")
     shorts = sum(1 for t in trades if t.get("direction") == "SHORT")
     total = me.get("total_trades", len(trades))
@@ -156,10 +173,63 @@ def _perf(me: dict, trades: list):
             ("Profit factor", _num(me.get("profit_factor"))),
             ("Max drawdown (price terms)", _num(me.get("max_drawdown")))]
     body = "".join(f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in rows)
+    pending = ACCOUNT_UNSUPPORTED if account_available else ACCOUNT_ONLY
     na = "".join('<tr><td>' + m + '</td><td><span class="pill-na">'
                  "Not available — requires account model</span></td></tr>"
-                 for m in ACCOUNT_ONLY)
+                 for m in pending)
     return body + na
+
+
+def _account_cards(account: dict) -> str:
+    """Account configuration, instrument economics, performance and balance chart."""
+    model = account.get("model") or {}
+    inst = account.get("instrument") or {}
+    met = account.get("metrics") or {}
+    cfg = "".join(f"<dt>{k}</dt><dd>{v}</dd>" for k, v in [
+        ("Account currency", _esc(account.get("account_currency"))),
+        ("Starting balance", _num(model.get("starting_balance"))),
+        ("Position size (lots)", _num(model.get("position_size_lots"))),
+        ("Commission / lot / round turn", _num(model.get("commission_per_lot_round_turn"))),
+    ])
+    con = "".join(f"<dt>{k}</dt><dd>{v}</dd>" for k, v in [
+        ("Symbol", _esc(inst.get("symbol"))),
+        ("Quote currency", _esc(inst.get("quote_currency"))),
+        ("Contract size", _num(inst.get("contract_size"))),
+        ("Tick size", _num(inst.get("tick_size"))),
+    ])
+    perf = "".join(f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in [
+        ("Starting balance", _num(met.get("starting_balance"))),
+        ("Ending balance", _num(met.get("ending_balance"))),
+        ("Net account PnL", _num(met.get("net_pnl"))),
+        ("Gross profit", _num(met.get("gross_profit"))),
+        ("Gross loss", _num(met.get("gross_loss"))),
+        ("Total commission", _num(met.get("total_commission"))),
+        ("Total return %", _num(met.get("total_return_pct"))),
+        ("Average trade (account)", _num(met.get("avg_trade_pnl"))),
+        ("Max realized-balance drawdown", _num(met.get("max_drawdown"))),
+        ("Max realized-balance drawdown %", _num(met.get("max_drawdown_pct"))),
+        ("Recovery factor", _num(met.get("recovery_factor"))),
+    ])
+    return (
+        "<div class='grid'>"
+        f"<section class='card'><h2>Account configuration</h2><dl class='kv'>{cfg}</dl></section>"
+        f"<section class='card'><h2>Instrument economics</h2><dl class='kv'>{con}</dl></section>"
+        "</div>"
+        "<section class='card'><h2>Account performance</h2>"
+        "<div class='scroll'><table><thead><tr><th>Metric</th><th>Value</th>"
+        f"</tr></thead><tbody>{perf}</tbody></table></div>"
+        "<p class='muted'>Realized balance from closed trades only — not tick-by-tick "
+        "floating equity. Spread is already inside the engine's BID/ASK fills and is "
+        "not re-applied. No slippage, swap, leverage or margin simulation.</p></section>"
+    )
+
+
+def _balance_svg(account: dict) -> str:
+    curve = account.get("balance_curve") or []
+    pts = [{"cumulative_pnl": p.get("realized_balance", 0.0)} for p in curve]
+    if not pts:
+        return "<p class='muted'>No realized balance points archived.</p>"
+    return _svg(pts)
 
 
 def render_report(result: dict) -> str:
@@ -171,6 +241,9 @@ def render_report(result: dict) -> str:
     ex = result.get("execution", {})
     trades = list(result.get("trades", []))
     eq = list(result.get("equity", []))
+    account = result.get("account") or {}
+    account_available = bool(account.get("available"))
+    acmap = _account_lookup(account) if account_available else None
     prm = cf.get("parameters", {})
     ptxt = ", ".join(f"{k}={v}" for k, v in prm.items()) if prm else "--"
     ident = "".join(f"<dt>{k}</dt><dd>{v}</dd>" for k, v in [
@@ -196,6 +269,39 @@ def render_report(result: dict) -> str:
     wlist = dq.get("warnings", []) or []
     warn = "".join(f"<li>{_esc(x)}</li>" for x in wlist) or "<li>None archived.</li>"
     n = len(trades)
+    account_sections = (
+        _account_cards(account)
+        + "<section class='card'><h2>Realized account balance</h2>"
+        + _balance_svg(account)
+        + "<p class='muted'>Realized balance from closed trades only — not "
+        "tick-by-tick floating equity.</p></section>"
+    ) if account_available else ""
+    if account_available:
+        account_note = (
+            "<p class='muted'>Account metrics available (see account sections below). "
+            "Price terms remain authoritative.</p>"
+        )
+        badge = "account currency"
+        balance_note = ("<p class='muted'>From archived equity points. Price-term PnL, "
+                        "not account balance.</p>")
+    elif account:
+        account_note = ("<p class='muted'>Account metrics Not available: "
+                        + _esc(account.get("reason_unavailable") or "incomplete account model.")
+                        + "</p>")
+        badge = "price terms"
+        balance_note = ("<p class='muted'>From archived equity points. No balance curve: "
+                        "no account balance series archived.</p>")
+    else:
+        # Byte-identical to the original non-account rendering.
+        account_note = "<p class='muted'>Account metrics Not available: no account model.</p>"
+        badge = "price terms"
+        balance_note = ("<p class='muted'>From archived equity points. No balance curve: "
+                        "no account balance series archived.</p>")
+    trade_head = ("<th>#</th><th>Dir</th><th>Signal time</th><th>Entry time</th>"
+                  "<th>Entry</th><th>Exit time</th><th>Exit</th><th>Reason</th><th>PnL</th>"
+                  "<th>Duration</th><th>MAE</th><th>MFE</th>")
+    if account_available:
+        trade_head += "<th>Gross acct</th><th>Commission</th><th>Net acct</th>"
     return ("<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>"
             "<meta name='viewport' content='width=device-width, initial-scale=1'>"
             f"<title>QBL archived run {_esc(result.get('run_id'))}</title>"
@@ -204,26 +310,25 @@ def render_report(result: dict) -> str:
             "Quant Backtest Lab - archived research run</div>"
             f"<h1>Run {_esc(result.get('run_id'))} "
             "<span class='badge archived'>ARCHIVED</span>"
-            "<span class='badge'>price terms</span></h1>"
+            f"<span class='badge'>{badge}</span></h1>"
             "<p class='sub'>From validated archived result.json. "
             "No strategy or execution logic re-run. PnL in price terms.</p></header>"
             "<div class='grid'>"
             f"<section class='card'><h2>Run identity</h2><dl class='kv'>{ident}</dl></section>"
             f"<section class='card'><h2>Data / execution</h2><dl class='kv'>{data}</dl>"
             "</section></div>"
+            f"{account_sections}"
             "<section class='card'><h2>Performance (price terms)</h2>"
             "<div class='scroll'><table><thead><tr><th>Metric</th><th>Value</th>"
-            f"</tr></thead><tbody>{_perf(me, trades)}</tbody></table></div>"
-            "<p class='muted'>Account metrics Not available: no account model.</p></section>"
+            f"</tr></thead><tbody>{_perf(me, trades, account_available)}</tbody></table></div>"
+            f"{account_note}</section>"
             "<section class='card'><h2>Cumulative PnL (price terms)</h2>"
             f"{_svg(eq)}"
-            "<p class='muted'>From archived equity points. No balance curve: "
-            "no account balance series archived.</p></section>"
+            f"{balance_note}</section>"
             f"<section class='card'><h2>Trades ({n})</h2>"
-            "<div class='scroll'><table><thead><tr><th>#</th><th>Dir</th>"
-            "<th>Signal time</th><th>Entry time</th><th>Entry</th><th>Exit time</th>"
-            "<th>Exit</th><th>Reason</th><th>PnL</th><th>Duration</th>"
-            f"<th>MAE</th><th>MFE</th></tr></thead><tbody>{_rows(trades)}</tbody>"
+            "<div class='scroll'><table><thead><tr>"
+            f"{trade_head}"
+            f"</tr></thead><tbody>{_rows(trades, acmap)}</tbody>"
             "</table></div>"
             "<p class='muted'>MAE/MFE N/A where the archive carries none.</p></section>"
             "<section class='card'><h2>Data quality</h2><dl class='kv'>"

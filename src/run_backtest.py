@@ -45,6 +45,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src import backtest as engine  # noqa: E402
+from src import accounting  # noqa: E402
 from src import publish_run as publish  # noqa: E402
 from src import run_errors  # noqa: E402
 from src import run_request  # noqa: E402
@@ -268,6 +269,25 @@ def execute_run(
             signals_ignored=max(0, len(signals) - len(records)),
         ),
     )
+
+    # Optional account/economics layer. Strictly post-processing of the
+    # authoritative price-term result: it never touches execution prices or the
+    # price-term metrics. No account model -> account stays None (unchanged).
+    resolved_instrument = None
+    if request.account is not None:
+        resolved_instrument = accounting.resolve_instrument(request.market.symbol, request.instrument)
+        if resolved_instrument is None:
+            result.account = accounting.unavailable_report(
+                f"no instrument economics configured for symbol {request.market.symbol!r}; "
+                "provide an explicit instrument spec",
+                request.account,
+                request.instrument,
+            )
+        else:
+            result.account = accounting.build_account_report(
+                records, request.account, resolved_instrument
+            )
+
     errors = result.validate()
     if errors:
         raise run_errors.ResultValidationError(f"result contract invalid: {errors}")
@@ -280,6 +300,7 @@ def execute_run(
         data_fingerprint=result.config.data_fingerprint,
         start=result.config.start,
         end=result.config.end,
+        instrument=resolved_instrument,
     )
     strategy_source = None
     if strategy_path is not None and strategy_path.is_file():

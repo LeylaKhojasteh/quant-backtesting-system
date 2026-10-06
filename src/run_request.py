@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 
+from src.accounting import AccountModel, InstrumentSpec
 from src.run_errors import (
     InvalidDatasetError,
     InvalidExecutionError,
@@ -63,6 +64,10 @@ class BacktestRunRequest:
     strategy: StrategyRequest
     market: MarketRequest
     execution: ExecutionRequest
+    #: Optional account/economics inputs. ``None`` keeps a run price-term only,
+    #: exactly as before this layer existed.
+    account: AccountModel | None = None
+    instrument: InstrumentSpec | None = None
     #: Orchestration-only flag (archive -> report -> publish). It is not a run
     #: input, so it is deliberately excluded from the archived run config.
     publish: bool = False
@@ -187,6 +192,69 @@ def _positive_number(name: str, value):
     return number
 
 
+def _account_amount(name: str, value, *, allow_zero: bool) -> float:
+    """Validate an account/instrument number (never bool) with explicit bounds."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise InvalidParametersError(f"{name} must be a number, got {value!r}")
+    number = float(value)
+    if number < 0 or (number == 0 and not allow_zero):
+        raise InvalidParametersError(
+            f"{name} must be {'>= 0' if allow_zero else '> 0'}, got {value!r}"
+        )
+    return number
+
+
+def parse_account(raw) -> AccountModel | None:
+    """Optional account model; ``None`` keeps the run price-term only."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise InvalidParametersError("account must be an object")
+    unknown = sorted(set(raw) - {
+        "account_currency", "starting_balance", "position_size_lots",
+        "commission_per_lot_round_turn",
+    })
+    if unknown:
+        raise InvalidParametersError(f"unknown account field(s): {unknown}")
+    currency = raw.get("account_currency", "USD")
+    if not isinstance(currency, str) or not currency.strip():
+        raise InvalidParametersError("account.account_currency is required")
+    return AccountModel(
+        account_currency=currency.strip(),
+        starting_balance=_account_amount("account.starting_balance", raw.get("starting_balance", 10000.0), allow_zero=False),
+        position_size_lots=_account_amount("account.position_size_lots", raw.get("position_size_lots", 1.0), allow_zero=False),
+        commission_per_lot_round_turn=_account_amount(
+            "account.commission_per_lot_round_turn",
+            raw.get("commission_per_lot_round_turn", 0.0),
+            allow_zero=True,
+        ),
+    )
+
+
+def parse_instrument(raw) -> InstrumentSpec | None:
+    """Optional explicit instrument economics; falls back to the catalog later."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise InvalidParametersError("instrument must be an object")
+    unknown = sorted(set(raw) - {"symbol", "quote_currency", "contract_size", "tick_size"})
+    if unknown:
+        raise InvalidParametersError(f"unknown instrument field(s): {unknown}")
+    symbol = raw.get("symbol")
+    quote = raw.get("quote_currency")
+    if not isinstance(symbol, str) or not symbol.strip():
+        raise InvalidParametersError("instrument.symbol is required")
+    if not isinstance(quote, str) or not quote.strip():
+        raise InvalidParametersError("instrument.quote_currency is required")
+    tick = raw.get("tick_size")
+    return InstrumentSpec(
+        symbol=symbol.strip(),
+        quote_currency=quote.strip(),
+        contract_size=_account_amount("instrument.contract_size", raw.get("contract_size"), allow_zero=False),
+        tick_size=None if tick is None else _account_amount("instrument.tick_size", tick, allow_zero=False),
+    )
+
+
 def parse_request_payload(payload) -> BacktestRunRequest:
     """Validate an HTTP/JSON payload into the existing ``BacktestRunRequest``.
 
@@ -195,7 +263,7 @@ def parse_request_payload(payload) -> BacktestRunRequest:
     """
     if not isinstance(payload, dict):
         raise InvalidParametersError("request body must be a JSON object")
-    unknown = sorted(set(payload) - {"strategy", "market", "execution", "publish"})
+    unknown = sorted(set(payload) - {"strategy", "market", "execution", "account", "instrument", "publish"})
     if unknown:
         raise InvalidParametersError(f"unknown request field(s): {unknown}")
 
@@ -247,6 +315,9 @@ def parse_request_payload(payload) -> BacktestRunRequest:
     if not isinstance(publish, bool):
         raise InvalidParametersError("publish must be a boolean")
 
+    account = parse_account(payload.get("account"))
+    instrument = parse_instrument(payload.get("instrument"))
+
     return BacktestRunRequest(
         strategy=StrategyRequest(selector=selector.strip(), parameters=dict(parameters)),
         market=MarketRequest(
@@ -257,6 +328,8 @@ def parse_request_payload(payload) -> BacktestRunRequest:
             data_source=data_source.strip(),
         ),
         execution=ExecutionRequest(stop_distance=stop_distance, take_profit_distance=take_profit),
+        account=account,
+        instrument=instrument,
         publish=publish,
     )
 
@@ -270,14 +343,20 @@ def build_run_config(
     data_fingerprint: str,
     start: str,
     end: str,
+    instrument: InstrumentSpec | None = None,
 ) -> dict:
     """Build the archived ``config.json`` for one run.
 
     Separates strategy / market / execution so opening the file later tells the
     reader exactly how the run was produced. Values are the effective ones
     actually used (no fake or unavailable values are stored).
+
+    ``account`` and ``instrument`` are included only when an account model was
+    requested; ``instrument`` is the effective spec actually used (explicit or
+    resolved from the catalog). Runs without an account model archive exactly
+    the same config as before.
     """
-    return {
+    config = {
         "run_id": run_id,
         "strategy": {
             "selector": request.strategy.selector,
@@ -301,3 +380,8 @@ def build_run_config(
             "take_profit_distance": request.execution.take_profit_distance,
         },
     }
+    if request.account is not None:
+        config["account"] = request.account.to_dict()
+    if request.account is not None or instrument is not None:
+        config["instrument"] = instrument.to_dict() if instrument is not None else None
+    return config

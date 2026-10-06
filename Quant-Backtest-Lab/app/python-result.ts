@@ -88,6 +88,43 @@ export type PythonResult = {
     signals_executed?: number | null;
     signals_ignored?: number | null;
   };
+  /** Optional account/economics report (src/accounting.py). Absent/null for
+   *  price-term-only runs and for archives written before this field existed. */
+  account?: PythonAccount | null;
+};
+
+export type PythonAccount = {
+  available: boolean;
+  reason_unavailable?: string | null;
+  account_currency?: string | null;
+  model?: {
+    account_currency?: string;
+    starting_balance?: number;
+    position_size_lots?: number;
+    commission_per_lot_round_turn?: number;
+  } | null;
+  instrument?: {
+    symbol?: string;
+    quote_currency?: string;
+    contract_size?: number;
+    tick_size?: number | null;
+  } | null;
+  metrics?: {
+    starting_balance?: number;
+    ending_balance?: number;
+    net_pnl?: number;
+    gross_profit?: number;
+    gross_loss?: number;
+    total_commission?: number;
+    total_return_pct?: number | null;
+    avg_trade_pnl?: number | null;
+    max_drawdown?: number;
+    max_drawdown_pct?: number | null;
+    recovery_factor?: number | null;
+  } | null;
+  trades?: { trade_id: number; gross_account_pnl: number; commission: number; net_account_pnl: number; balance_after: number }[];
+  balance_curve?: { timestamp: string; realized_balance: number }[];
+  notes?: string[];
 };
 
 const REQUIRED_TOP = ['run_id', 'created_at', 'strategy', 'config', 'trades', 'equity', 'metrics', 'data_quality', 'execution'] as const;
@@ -200,6 +237,11 @@ export function mapPythonResultToBacktestRun(payload: PythonResult): unknown {
   );
   const runId = pythonRunIdToUuid(payload.run_id);
 
+  const acct = payload.account ?? null;
+  const acctReady = !!(acct && acct.available);
+  const acctRows = acctReady ? (acct!.trades ?? []) : [];
+  const acctCurve = acctReady ? (acct!.balance_curve ?? []) : [];
+
   const trades = ordered.map((t, i) => ({
     id: i + 1,
     direction: t.direction,
@@ -214,6 +256,13 @@ export function mapPythonResultToBacktestRun(payload: PythonResult): unknown {
     spreadIn: t.spread_at_entry,
     spreadOut: t.spread_at_exit,
     reason: EXIT_MAP[t.exit_reason],
+    ...(acctReady
+      ? {
+          volume: acct!.model?.position_size_lots,
+          commission: acctRows[i]?.commission,
+          pnlCurrency: acctRows[i]?.net_account_pnl,
+        }
+      : {}),
   }));
 
   const running: number[] = [];
@@ -225,6 +274,12 @@ export function mapPythonResultToBacktestRun(payload: PythonResult): unknown {
   const equity = ordered.map((t, i) => ({
     timestampUtc: pythonTimeToUtcIso(t.exit_time),
     pnl: running[i],
+    ...(acctReady
+      ? {
+          balance: acctCurve[i]?.realized_balance ?? (acctRows[i]?.balance_after as number | undefined),
+          pnlCurrency: acctRows[i]?.net_account_pnl,
+        }
+      : {}),
   }));
 
   const m = payload.metrics;
@@ -273,16 +328,27 @@ export function mapPythonResultToBacktestRun(payload: PythonResult): unknown {
       timeCoveragePct: null,
       warnings: payload.data_quality.warnings ?? [],
     },
-    account: {
-      currency: null,
-      initialBalance: null,
-      leverage: null,
-      contractSize: null,
-      lotSize: null,
-      pipValue: null,
-      note: 'Price-term engine only; no account-currency model configured.',
-      accountReady: false,
-    },
+    account: acctReady
+      ? {
+          currency: acct!.account_currency ?? null,
+          initialBalance: acct!.metrics?.starting_balance ?? acct!.model?.starting_balance ?? null,
+          leverage: null,
+          contractSize: acct!.instrument?.contract_size ?? null,
+          lotSize: acct!.model?.position_size_lots ?? null,
+          pipValue: null,
+          note: (acct!.notes ?? ['Account model applied.']).join(' '),
+          accountReady: true,
+        }
+      : {
+          currency: acct?.account_currency ?? null,
+          initialBalance: null,
+          leverage: null,
+          contractSize: null,
+          lotSize: null,
+          pipValue: null,
+          note: acct?.reason_unavailable ?? 'Price-term engine only; no account-currency model configured.',
+          accountReady: false,
+        },
     trades,
     equity,
     metrics: {
@@ -299,7 +365,7 @@ export function mapPythonResultToBacktestRun(payload: PythonResult): unknown {
       payoff: m.avg_loss !== 0 ? m.avg_win / Math.abs(m.avg_loss) : null,
       profitFactor: m.profit_factor ?? null,
       maxDrawdown: m.max_drawdown ?? null,
-      maxDrawdownPct: null,
+      maxDrawdownPct: acctReady ? acct!.metrics?.max_drawdown_pct ?? null : null,
       maxLosingStreak: lossRuns.length ? Math.max(...lossRuns.map((s) => s.count)) : 0,
       maxWinningStreak: winRuns.length ? Math.max(...winRuns.map((s) => s.count)) : 0,
       avgDurationMin:
@@ -308,21 +374,39 @@ export function mapPythonResultToBacktestRun(payload: PythonResult): unknown {
           : mean(ordered.map((t) => t.duration_seconds)) / 60,
       avgSpreadIn: mean(spreadsIn),
       avgSpreadOut: mean(spreadsOut),
-      returnPct: null,
+      returnPct: acctReady ? acct!.metrics?.total_return_pct ?? null : null,
       annualizedReturnPct: null,
       sharpe: null,
       sortino: null,
       calmar: null,
-      accountUnavailableReasons: ACCOUNT_UNAVAILABLE_REASONS,
+      accountUnavailableReasons: acctReady
+        ? []
+        : acct?.reason_unavailable
+          ? [acct.reason_unavailable, ...ACCOUNT_UNAVAILABLE_REASONS]
+          : ACCOUNT_UNAVAILABLE_REASONS,
     },
     warnings: [
       `Archived Python run ${payload.run_id} · engine ${payload.execution.engine ?? 'src.backtest'} · ` +
         `${payload.execution.signals_received ?? ordered.length} signals received, ` +
         `${payload.execution.signals_executed ?? ordered.length} executed.`,
+      ...(acctReady
+        ? [
+            `Account model ${acct!.account_currency ?? ''}: starting balance ` +
+              `${acct!.metrics?.starting_balance ?? acct!.model?.starting_balance ?? ''}, ` +
+              `${acct!.model?.position_size_lots ?? ''} lots, contract size ` +
+              `${acct!.instrument?.contract_size ?? ''}. Realized balance from closed trades only.`,
+          ]
+        : []),
     ],
     limitations: [
       'PnL is in price terms only; no account currency, lot sizing, commission or conversion is applied.',
       'MAE/MFE are not supplied by the engine result; excursion analytics stay unavailable.',
+      ...(acctReady
+        ? [
+            'Account PnL = price PnL × contract size × lots, minus an explicit per-lot round-turn commission.',
+            'Spread is already inside the engine BID/ASK fills and is not re-applied. Sharpe/Sortino/Calmar/annualized return stay unavailable.',
+          ]
+        : []),
     ],
   };
 }

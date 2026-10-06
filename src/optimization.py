@@ -60,13 +60,17 @@ class OptimizationRequest:
     execution_grid: dict = field(default_factory=dict)
     objective: Objective = field(default_factory=lambda: Objective("net_pnl", "maximize"))
     max_candidates: int = DEFAULT_MAX_CANDIDATES
+    #: Optional account/instrument settings carried through to every candidate
+    #: run. ``None`` keeps candidates price-term only (unchanged behavior).
+    account: "run_request.AccountModel | None" = None
+    instrument: "run_request.InstrumentSpec | None" = None
 
 
 def parse_optimization_payload(payload) -> OptimizationRequest:
     """Validate an HTTP/JSON optimization payload into OptimizationRequest."""
     if not isinstance(payload, dict):
         raise run_errors.InvalidOptimizationError("request body must be a JSON object")
-    allowed = {"strategy", "market", "execution", "strategy_grid", "execution_grid", "objective", "max_candidates"}
+    allowed = {"strategy", "market", "execution", "strategy_grid", "execution_grid", "objective", "max_candidates", "account", "instrument"}
     unknown = sorted(set(payload) - allowed)
     if unknown:
         raise run_errors.InvalidOptimizationError(f"unknown request field(s): {unknown}")
@@ -114,6 +118,8 @@ def parse_optimization_payload(payload) -> OptimizationRequest:
         execution_grid=dict(execution_grid),
         objective=Objective(metric, direction),
         max_candidates=max_candidates if max_candidates is not None else DEFAULT_MAX_CANDIDATES,
+        account=run_request.parse_account(payload.get("account")),
+        instrument=run_request.parse_instrument(payload.get("instrument")),
     )
 
 
@@ -267,6 +273,8 @@ def run_study(
             ),
             market=request.market,
             execution=run_request.ExecutionRequest(**combo["execution"]),
+            account=request.account,
+            instrument=request.instrument,
             publish=False,  # candidates stay local (Task 13)
         )
         try:

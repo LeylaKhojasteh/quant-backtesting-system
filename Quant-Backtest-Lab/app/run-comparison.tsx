@@ -43,6 +43,21 @@ function bestWorst(runs: ComparisonRun[], key: MetricKey, dir: 'max' | 'min' | n
   return { best: nums.indexOf(target), worst: target === opposite ? -1 : nums.indexOf(opposite) };
 }
 
+/** Best/worst over any numeric run field; never crowns an unavailable value. */
+function bestWorstBy(
+  runs: ComparisonRun[],
+  pick: (r: ComparisonRun) => number | null,
+  dir: 'max' | 'min' | null,
+) {
+  if (!dir) return { best: -1, worst: -1 };
+  const values = runs.map(pick);
+  if (!values.every((v) => typeof v === 'number' && Number.isFinite(v))) return { best: -1, worst: -1 };
+  const nums = values as number[];
+  const target = dir === 'max' ? Math.max(...nums) : Math.min(...nums);
+  const opposite = dir === 'max' ? Math.min(...nums) : Math.max(...nums);
+  return { best: nums.indexOf(target), worst: target === opposite ? -1 : nums.indexOf(opposite) };
+}
+
 /** Isolated multi-run cumulative-PnL chart (price-term, indexed). */
 function PnlChart({ runs, equity }: { runs: ComparisonRun[]; equity: Record<string, number[]> }) {
   const series = runs.map((r, i) => ({ run: r, values: equity[r.run_id] ?? [], color: COLORS[i % COLORS.length] }));
@@ -164,6 +179,49 @@ export function RunComparison({ runIds }: { runIds: string[] }) {
           </div>
 
           <PnlChart runs={result.runs} equity={result.equity} />
+
+          {result.runs.some((r) => r.account_ready) && (
+            <>
+              <div className="rr-group-label">
+                Account terms <span className="meta">· best/worst shown only when account setups are compatible</span>
+              </div>
+              <div className="cmp-table-wrap">
+                <table className="cmp-table">
+                  <thead>
+                    <tr>
+                      <th>Run</th><th>Account</th><th>Acct net PnL</th><th>Return %</th>
+                      <th>Commission</th><th>Realized DD</th><th>Lots</th><th>Contract</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {result.runs.map((run, ri) => {
+                      const comparable = result.differences.account_comparable;
+                      const net = comparable
+                        ? bestWorstBy(result.runs, (r) => r.account_net_pnl, 'max')
+                        : { best: -1, worst: -1 };
+                      const ret = comparable
+                        ? bestWorstBy(result.runs, (r) => r.account_return_pct, 'max')
+                        : { best: -1, worst: -1 };
+                      const cls = (bw: { best: number; worst: number }) =>
+                        ri === bw.best ? 'good-text' : ri === bw.worst ? 'bad-text' : '';
+                      return (
+                        <tr key={run.run_id}>
+                          <td className="mono">{run.run_id}</td>
+                          <td>{run.account_ready ? run.account_currency ?? '—' : 'Not available'}</td>
+                          <td className={cls(net)}>{run.account_ready ? fmtNum(run.account_net_pnl) : '—'}</td>
+                          <td className={cls(ret)}>{run.account_ready && run.account_return_pct != null ? `${fmtNum(run.account_return_pct)}%` : '—'}</td>
+                          <td>{run.account_ready ? fmtNum(run.account_commission) : '—'}</td>
+                          <td>{run.account_ready ? fmtNum(run.account_max_drawdown) : '—'}</td>
+                          <td>{run.account_ready ? fmtNum(run.account_position_size_lots) : '—'}</td>
+                          <td>{run.account_ready ? fmtNum(run.account_contract_size) : '—'}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
         </>
       )}
     </div>
