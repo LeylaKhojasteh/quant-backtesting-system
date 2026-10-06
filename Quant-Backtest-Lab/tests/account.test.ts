@@ -73,7 +73,7 @@ describe('python-result.ts - account model mapping', () => {
     assert.equal(run.account.initialBalance, 10000);
     assert.equal(run.account.contractSize, CONTRACT);
     assert.equal(run.account.lotSize, LOTS);
-    assert.ok(run.metrics.returnPct !== null && Math.abs(run.metrics.returnPct - 20.62) < 1e-6);
+    assert.ok(typeof run.metrics.returnPct === 'number' && Math.abs(run.metrics.returnPct - 20.62) < 1e-6);
     assert.ok(run.metrics.maxDrawdownPct !== null);
     // commission applied exactly once per trade
     assert.equal(run.trades.length, 7);

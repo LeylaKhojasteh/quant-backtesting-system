@@ -525,3 +525,20 @@
 .wf-chart-legend{margin-top:6px;font-size:10.5px;color:var(--muted-foreground)}
 .wf-params{margin-top:4px}
 .rr-account{display:flex;flex-direction:column;gap:8px;padding:4px 0 4px 10px;margin:4px 0;border-left:2px solid var(--border)}
+.mc-basis{font-size:11.5px;color:var(--muted-foreground)}
+.mc-basis b{color:var(--foreground);font-weight:500}
+.mc-warning{color:var(--warning)}
+.mc-envelope{margin-top:8px;border:1px solid var(--border);border-radius:6px;padding:8px}
+.mc-envelope svg{width:100%;height:190px;display:block}
+.mc-legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:6px;font-size:10.5px;color:var(--muted-foreground)}
+.mc-legend i{display:inline-block;width:10px;height:3px;margin-right:5px;vertical-align:middle}
+.mc-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:10px;margin:6px 0}
+.mc-card{border:1px solid var(--border);border-radius:6px;padding:10px;background:var(--surface)}
+.mc-card-title{display:block;font-size:11.5px;color:var(--muted-foreground);margin-bottom:6px}
+.mc-hist svg{width:100%;height:110px;display:block}
+.mc-hist-axis{display:flex;justify-content:space-between;font-size:10px;color:var(--muted-foreground);margin-top:4px}
+.mc-hist-axis .meta{font-size:10px}
+.mc-prob{margin-top:6px;font-size:11.5px}
+.mc-prob b{color:var(--foreground)}
+.mc-note{margin:8px 0;font-size:11.5px;color:var(--muted-foreground);border-left:2px solid var(--warning);padding-left:8px}
+.mc-source .tag{margin-left:6px}

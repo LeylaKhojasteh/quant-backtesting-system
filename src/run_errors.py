@@ -146,3 +146,23 @@ class WalkForwardNotFoundError(RunError):
 class InvalidWalkForwardIdError(RunError):
     code = "invalid_walk_forward_id"
     http_status = 400
+
+
+class InvalidMonteCarloError(RunError):
+    code = "invalid_monte_carlo"
+    http_status = 400
+
+
+class MonteCarloLimitError(RunError):
+    code = "monte_carlo_limit_exceeded"
+    http_status = 400
+
+
+class MonteCarloNotFoundError(RunError):
+    code = "monte_carlo_not_found"
+    http_status = 404
+
+
+class InvalidMonteCarloIdError(RunError):
+    code = "invalid_monte_carlo_id"
+    http_status = 400

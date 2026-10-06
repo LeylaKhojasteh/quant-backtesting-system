@@ -594,3 +594,110 @@ export async function getWalkForward(wfId: string, fetchImpl?: typeof fetch): Pr
   const data = await requestJson<{ walkforward: WalkForwardStudy }>(`/walkforwards/${enc(wfId)}`, undefined, fetchImpl);
   return data.walkforward;
 }
+
+export type MonteCarloMethod = 'shuffle' | 'bootstrap';
+export type MonteCarloBasis = 'price' | 'account';
+
+export interface MonteCarloHistogramBin {
+  from: number;
+  to: number;
+  count: number;
+}
+
+export interface MonteCarloStat {
+  min: number;
+  p05: number;
+  median: number;
+  p95: number;
+  max: number;
+  histogram: { from: number; to: number; bins: MonteCarloHistogramBin[] };
+}
+
+export interface MonteCarloEnvelopePoint {
+  index: number;
+  p05: number;
+  median: number;
+  p95: number;
+}
+
+export interface MonteCarloSummary {
+  simulations: number;
+  seed: number;
+  method: MonteCarloMethod;
+  basis: MonteCarloBasis;
+  trade_count: number;
+  max_drawdown: MonteCarloStat | null;
+  max_losing_streak: MonteCarloStat | null;
+  max_drawdown_pct: MonteCarloStat | null;
+  terminal_pnl: MonteCarloStat | null;
+  terminal_pnl_constant: boolean;
+  ending_balance: MonteCarloStat | null;
+  return_pct: MonteCarloStat | null;
+  probability_terminal_negative: number | null;
+  probability_terminal_negative_label: string;
+}
+
+export interface MonteCarloStudy {
+  study_id: string;
+  created_at: string;
+  status: string;
+  source: {
+    run_id: string;
+    strategy: { name: string; version: string } | null;
+    strategy_selector: string | null;
+    symbol: string | null;
+    timeframe: string | null;
+    start: string | null;
+    end: string | null;
+  };
+  method: MonteCarloMethod;
+  basis: MonteCarloBasis;
+  simulations: number;
+  seed: number;
+  trade_count: number;
+  small_sample: boolean;
+  account: { currency: string | null; starting_balance: number | null } | null;
+  labels: { path: string; original: string };
+  summary: MonteCarloSummary;
+  source_actual: Record<string, number | null>;
+  envelope: MonteCarloEnvelopePoint[];
+  original_path: number[];
+}
+
+export interface MonteCarloSummaryItem {
+  study_id: string;
+  created_at: string;
+  status: string;
+  source_run_id: string;
+  strategy: string;
+  method: MonteCarloMethod;
+  basis: MonteCarloBasis;
+  simulations: number;
+  seed: number;
+}
+
+export async function startMonteCarlo(
+  payload: { run_id: string; method: MonteCarloMethod; simulations: number; seed: number },
+  fetchImpl?: typeof fetch,
+): Promise<MonteCarloStudy> {
+  const data = await requestJson<{ study: MonteCarloStudy }>(
+    '/montecarlo',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+    fetchImpl,
+  );
+  return data.study;
+}
+
+export async function listMonteCarlo(fetchImpl?: typeof fetch): Promise<MonteCarloSummaryItem[]> {
+  const data = await requestJson<{ montecarlo?: MonteCarloSummaryItem[] }>('/montecarlo', undefined, fetchImpl);
+  return Array.isArray(data?.montecarlo) ? data.montecarlo : [];
+}
+
+export async function getMonteCarlo(studyId: string, fetchImpl?: typeof fetch): Promise<MonteCarloStudy> {
+  const data = await requestJson<{ study: MonteCarloStudy }>(`/montecarlo/${enc(studyId)}`, undefined, fetchImpl);
+  return data.study;
+}

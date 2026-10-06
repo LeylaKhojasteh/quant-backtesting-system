@@ -11,6 +11,7 @@ import { useWorkspace } from './workspace-context';
 import { RunComparison } from './run-comparison';
 import { OptimizationPanel } from './optimization-panel';
 import { WalkForwardPanel } from './walk-forward-panel';
+import { MonteCarloPanel } from './monte-carlo-panel';
 import {
   BridgeError,
   deleteRun,
@@ -181,6 +182,7 @@ export function RunLibrary() {
               <TabsTrigger value="compare">Compare</TabsTrigger>
               <TabsTrigger value="optimize">Optimize</TabsTrigger>
               <TabsTrigger value="walkforward">Walk-Forward</TabsTrigger>
+              <TabsTrigger value="montecarlo">Monte Carlo</TabsTrigger>
               <TabsTrigger value="strategies">Strategies</TabsTrigger>
             </TabsList>
           </Tabs>
@@ -311,6 +313,8 @@ export function RunLibrary() {
               }}
             />
           )}
+
+          {tab === 'montecarlo' && <MonteCarloPanel />}
 
           {tab === 'strategies' && (
             <div className="lib-panel">
