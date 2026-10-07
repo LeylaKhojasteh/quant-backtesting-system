@@ -151,6 +151,15 @@ def _fingerprint(path: Path) -> str:
     return f"sha256:{digest.hexdigest()}"
 
 
+def _data_fingerprint(market) -> str:
+    """Provenance fingerprint: raw CSV hash, or the derived cache fingerprint."""
+    if str(market.data_source).startswith("cache:"):
+        from src import data_engine
+        return data_engine.cache_fingerprint(
+            market.data_source, symbol=market.symbol, start=market.start, end=market.end)
+    return _fingerprint(Path(market.data_source))
+
+
 def execute_run(
     request: run_request.BacktestRunRequest,
     *,
@@ -186,10 +195,21 @@ def execute_run(
     import pandas as pd  # local import: contract/store modules stay dependency-free
 
     data_path = Path(request.market.data_source)
-    if not data_path.is_file():
-        raise run_errors.InvalidDatasetError(f"dataset not found: {data_path}")
     try:
-        ticks = _load_ticks(data_path)
+        if str(request.market.data_source).startswith("cache:"):
+            # Derived Parquet tick store (Data Engine). The engine still receives
+            # the same canonical tick frame; src/backtest.py is untouched.
+            from src import data_engine
+            ticks = data_engine.load_ticks_frame(
+                request.market.data_source,
+                symbol=request.market.symbol,
+                start=request.market.start,
+                end=request.market.end,
+            )
+        elif data_path.is_file():
+            ticks = _load_ticks(data_path)
+        else:
+            raise run_errors.InvalidDatasetError(f"dataset not found: {data_path}")
         if getattr(ticks["timestamp"].dt, "tz", None) is None:
             ticks["timestamp"] = ticks["timestamp"].dt.tz_localize("UTC")
         else:
@@ -255,7 +275,7 @@ def execute_run(
             end=end_iso,
             parameters=effective_parameters,
             data_source=str(data_path),
-            data_fingerprint=_fingerprint(data_path),
+            data_fingerprint=_data_fingerprint(request.market),
         ),
         trades=records,
         equity=equity,

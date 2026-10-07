@@ -27,3 +27,8 @@ runs/
 
 # Dev server logs
 .qbl-dev*.log
+.qbl-bridge.log
+
+# Derived data engine cache (Parquet tick store). Rebuildable/disposable,
+# never committed — regenerate with `python -m src.data_engine build`.
+cache/
