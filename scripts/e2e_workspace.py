@@ -181,7 +181,7 @@ def main() -> int:
         ok &= check("run_0001 present in selector", cdp.evaluate(f"({WAIT_SOURCE_JS})('run_0001')"))
         ok &= check("real-run catalogs load", cdp.evaluate(f"({WAIT_TEXT_JS})(['[aria-label=\"Real run strategy\"]','Candle Direction'])"),
                     cdp.evaluate(f"({TEXT_JS})('[aria-label=\"Real run strategy\"]')"))
-        ok &= check("dataset catalog loads", cdp.evaluate(f"({WAIT_TEXT_JS})(['[aria-label=\"Real run dataset\"]','XAUUSD_'])"))
+        ok &= check("dataset catalog loads", cdp.evaluate(f"({WAIT_TEXT_JS})(['[aria-label=\"Real run dataset\"]','XAUUSD'])"))
 
         # ---- Run Library lists runs ------------------------------------------
         open_library(cdp)

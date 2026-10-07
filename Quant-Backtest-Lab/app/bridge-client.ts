@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Frontend client for the local Python bridge (src/bridge.py).
  *
  * This is the only place the UI talks HTTP/JSON to Python. It is deliberately
@@ -33,15 +33,44 @@ export interface StrategyInfo {
 }
 
 export interface DatasetInfo {
-  id: string;
-  filename: string;
-  path: string;
+  dataset_id: string;
   symbol: string;
-  format: string;
-  /** ISO date (YYYY-MM-DD) when deterministically known, else null. */
-  start: string | null;
-  end: string | null;
-  bytes: number;
+  provider: string;
+  provider_label: string;
+  data_type: string;
+  timezone: string;
+  label: string;
+  subtitle: string;
+  coverage_start: string | null;
+  coverage_end: string | null;
+  years: number[];
+  complete_years: number[];
+  partial_months: string[];
+  supported_timeframes: string[];
+  prepared_timeframes: string[];
+  tick_ready: boolean;
+  default_start: string | null;
+  default_end: string | null;
+}
+
+export interface DatasetTicksPreview {
+  dataset_id: string;
+  count: number;
+  rows: { timestamp: string; bid: number; ask: number; bid_volume: number; ask_volume: number; spread: number }[];
+}
+
+export async function loadDatasetTicks(
+  datasetId: string,
+  start: string,
+  end: string,
+  limit = 25,
+  fetchImpl?: typeof fetch,
+): Promise<DatasetTicksPreview> {
+  return requestJson<DatasetTicksPreview>(
+    `/datasets/${enc(datasetId)}/ticks?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&limit=${limit}`,
+    undefined,
+    fetchImpl,
+  );
 }
 
 export interface AccountPayload {
@@ -61,11 +90,12 @@ export interface InstrumentPayload {
 export interface BacktestRunRequestPayload {
   strategy: { selector: string; parameters?: Record<string, unknown> };
   market: {
+    dataset_id?: string;
     symbol: string;
     timeframe?: string;
     start?: string | null;
     end?: string | null;
-    data_source: string;
+    data_source?: string;
   };
   execution?: { stop_distance?: number; take_profit_distance?: number };
   /** Optional account model. Omit for a price-term-only run (unchanged). */
@@ -272,6 +302,7 @@ export interface RunDetail extends RunLibrarySummary {
     start: string | null;
     end: string | null;
     data_source: string;
+    dataset_id: string | null;
     dataset: string | null;
   };
   selector: string | null;
@@ -401,7 +432,7 @@ export type ObjectiveMetric =
 
 export interface OptimizationPayload {
   strategy: string;
-  market: { symbol: string; timeframe?: string; start?: string | null; end?: string | null; data_source: string };
+  market: { dataset_id?: string; symbol: string; timeframe?: string; start?: string | null; end?: string | null; data_source?: string };
   execution: { stop_distance: number; take_profit_distance: number };
   strategy_grid: Record<string, unknown[]>;
   execution_grid: Record<string, number[]>;
@@ -494,7 +525,7 @@ export interface WalkForwardWindowPayload {
 
 export interface WalkForwardPayload {
   strategy: string;
-  market: { symbol: string; timeframe?: string; start?: string | null; end?: string | null; data_source: string };
+  market: { dataset_id?: string; symbol: string; timeframe?: string; start?: string | null; end?: string | null; data_source?: string };
   execution: { stop_distance: number; take_profit_distance: number };
   strategy_grid: Record<string, unknown[]>;
   execution_grid: Record<string, number[]>;

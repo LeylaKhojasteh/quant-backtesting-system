@@ -159,6 +159,96 @@ class ReaderTest(FixtureCase):
         self.assertEqual(ds["coverage_start"][:10], "2099-01-01")
 
 
+class CandleCacheTest(FixtureCase):
+    def _ticks_built(self):
+        de.build_all(self.data, self.root)
+
+    def test_timeframes_match_engine_supported(self):
+        from src import run_request
+        self.assertEqual(tuple(de.SUPPORTED_CANDLE_TIMEFRAMES), tuple(run_request.SUPPORTED_TIMEFRAME_VALUES))
+
+    def test_build_verify_all_six_timeframes(self):
+        self._ticks_built()
+        for tf in de.SUPPORTED_CANDLE_TIMEFRAMES:
+            r = de.build_candle_partition(self._pid(1), tf, root=self.root)
+            self.assertEqual(r["status"], "BUILT")
+            v = de.verify_candle_partition(self._pid(1), tf, root=self.root)
+            self.assertTrue(v["row_count_parity"] and v["value_parity"], tf)
+            cols = de.pq.read_table(de.candle_partition_parquet(self.root, self._pid(1), tf)).column_names
+            self.assertEqual(cols, list(de.CANDLE_COLUMNS))
+
+    def test_candle_idempotency(self):
+        self._ticks_built()
+        de.build_candle_partition(self._pid(1), "15min", root=self.root)
+        again = de.build_candle_partition(self._pid(1), "15min", root=self.root)
+        self.assertEqual(again["status"], "CACHE HIT")
+
+    def test_candle_invalidation_on_force(self):
+        self._ticks_built()
+        de.build_candle_partition(self._pid(1), "15min", root=self.root)
+        forced = de.build_candle_partition(self._pid(1), "15min", root=self.root, force=True)
+        self.assertEqual(forced["status"], "BUILT")
+
+    def test_corrupted_candle_detected(self):
+        self._ticks_built()
+        de.build_candle_partition(self._pid(1), "15min", root=self.root)
+        import pandas as pd
+        import pyarrow as pa
+        path = de.candle_partition_parquet(self.root, self._pid(1), "15min")
+        frame = de.pq.read_table(path).to_pandas()
+        frame.loc[0, "open"] = 999.99
+        de.pq.write_table(pa.Table.from_pandas(frame[list(de.CANDLE_COLUMNS)], schema=de.CANDLE_ARROW_SCHEMA, preserve_index=False), path)
+        v = de.verify_candle_partition(self._pid(1), "15min", root=self.root)
+        self.assertFalse(v["value_parity"])
+
+    def test_candle_cache_missing_structured(self):
+        self._ticks_built()
+        with self.assertRaises(de.PartitionMissingError):
+            de.load_candles_frame("cache:", symbol="TESTSYM", timeframe="15min",
+                                  start="2099-01-01", end="2099-01-31", root=self.root)
+
+    def test_month_boundary_4h_no_dup_or_missing(self):
+        self._ticks_built()
+        for pid in (self._pid(1), self._pid(2)):
+            de.build_candle_partition(pid, "4h", root=self.root)
+        # combined on-the-fly over both months == concatenation of cached months
+        t1 = de.pq.read_table(de.partition_parquet(self.root, self._pid(1)), columns=["timestamp", "bid", "ask"]).to_pandas()
+        t2 = de.pq.read_table(de.partition_parquet(self.root, self._pid(2)), columns=["timestamp", "bid", "ask"]).to_pandas()
+        combined = de.build_candles_from_ticks(pd_concat(t1, t2), "4h")
+        c1 = de.pq.read_table(de.candle_partition_parquet(self.root, self._pid(1), "4h")).to_pandas()
+        c2 = de.pq.read_table(de.candle_partition_parquet(self.root, self._pid(2), "4h")).to_pandas()
+        joined = pd_concat(c1, c2).sort_values("timestamp", kind="stable").reset_index(drop=True)
+        self.assertEqual(de._digest_candles(combined), de._digest_candles(joined))
+        ts = joined["timestamp"].tolist()
+        self.assertEqual(len(ts), len(set(ts)), "no duplicate candle at month boundary")
+        self.assertEqual(ts, sorted(ts), "monotonic timestamps")
+
+
+def pd_concat(a, b):
+    import pandas as pd
+    return pd.concat([a, b], ignore_index=True)
+
+
+class LogicalRequestTest(unittest.TestCase):
+    def test_dataset_id_derives_cache_source(self):
+        from src import run_request
+        req = run_request.parse_request_payload({
+            "strategy": {"selector": "candle_direction"},
+            "market": {"dataset_id": "xauusd_dukas_ticks", "symbol": "XAUUSD",
+                       "timeframe": "15min", "start": "2025-01-01", "end": "2025-12-31"},
+        })
+        self.assertEqual(req.market.dataset_id, "xauusd_dukas_ticks")
+        self.assertEqual(req.market.data_source, "cache:xauusd_dukas_ticks")
+
+    def test_missing_dataset_id_and_source_rejected(self):
+        from src import run_request, run_errors
+        with self.assertRaises(run_errors.InvalidDatasetError):
+            run_request.parse_request_payload({
+                "strategy": {"selector": "candle_direction"},
+                "market": {"symbol": "XAUUSD", "timeframe": "15min"},
+            })
+
+
 @unittest.skipUnless(JAN_CSV.is_file() and de.partition_parquet(de.DEFAULT_CACHE_ROOT, de.PartitionId("DUKAS", "XAUUSD", 2025, 1)).is_file(),
                      "January raw data and derived cache required")
 class GoldenJanuaryTest(unittest.TestCase):

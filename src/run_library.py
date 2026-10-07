@@ -171,6 +171,7 @@ def run_detail(runs_dir: str | Path, run_id: str, public_dir: str | Path) -> dic
                 "start": conf.get("start"),
                 "end": conf.get("end"),
                 "data_source": data_source,
+                "dataset_id": conf.get("dataset_id"),
                 "dataset": Path(data_source).name if data_source else None,
             },
             "selector": selector,

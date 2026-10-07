@@ -173,3 +173,10 @@ class UnsupportedTimeframeError(RunError):
 
     code = "unsupported_timeframe"
     http_status = 400
+
+
+class DataNotPreparedError(RunError):
+    """Derived tick/candle cache missing or not prepared for the requested run."""
+
+    code = "data_not_prepared"
+    http_status = 400

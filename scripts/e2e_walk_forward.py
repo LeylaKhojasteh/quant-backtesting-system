@@ -65,7 +65,7 @@ WAIT_CMP_ROWS_JS = ("(n => new Promise(res => {"
                     " const ok=()=>document.querySelectorAll('.cmp-table tbody tr').length>=n;"
                     " if(ok())return res(true);" + _POLL.replace("MAX", "60000") + "}))")
 WAIT_WF_JS = ("(() => new Promise(res => {"
-              " const ok=()=>!!document.querySelector('.opt-study-head') && document.querySelectorAll('.wf-fold-table tbody tr').length>=6;"
+              " const ok=()=>!!document.querySelector('.opt-study-head') && document.querySelectorAll('.wf-fold-table tbody tr').length>=3;"
               " if(ok())return res(true);" + _POLL.replace("MAX", "420000") + "}))()")
 WAIT_WF_ROWS_JS = ("(n => new Promise(res => {"
                    " const ok=()=>document.querySelectorAll('.wf-fold-table tbody tr').length>=n;"
@@ -169,10 +169,8 @@ def main() -> int:
     walkforwards_dir = tmp / "walkforwards"
     strategy_dir = tmp / "strategies"
     strategy_dir.mkdir()
-    data_dir = tmp / "data"
-    data_dir.mkdir()
+    data_dir = ROOT / "data"
     shutil.copy(THRESHOLD, strategy_dir / "threshold_direction.py")
-    _write_ticks(data_dir / "XAUUSD_TEST_2025_01_ticks.csv", "2025-01-01", 8)
     shutil.copytree(FIXTURE, runs_dir / "run_0001")
     shutil.copytree(FIXTURE, runs_dir / "run_0002")
 
@@ -208,18 +206,18 @@ def main() -> int:
         set_input(cdp, '[aria-label="Walk-forward values enabled"]', "true")
         set_input(cdp, '[aria-label="Walk-forward stop values"]', "5")
         set_input(cdp, '[aria-label="Walk-forward take values"]', "10")
-        set_input(cdp, '[aria-label="Walk-forward start date"]', "2025-01-01")
-        set_input(cdp, '[aria-label="Walk-forward end date"]', "2025-01-08")
+        set_input(cdp, '[aria-label="Walk-forward start date"]', "2025-01-06")
+        set_input(cdp, '[aria-label="Walk-forward end date"]', "2025-01-10")
         set_input(cdp, '[aria-label="Walk-forward train days"]', "2")
         set_input(cdp, '[aria-label="Walk-forward test days"]', "1")
         set_input(cdp, '[aria-label="Walk-forward step days"]', "1")
         count_text = cdp.evaluate(f"({TEXT_JS})('.wf-count')") or ""
-        ok &= check("fold count preview correct", "Folds: 6" in count_text and "candidates/fold: 2" in count_text
-                    and "total executions: 12" in count_text, count_text[:90])
+        ok &= check("fold count preview correct", "Folds: 3" in count_text and "candidates/fold: 2" in count_text
+                    and "total executions: 6" in count_text, count_text[:90])
 
         manifest_ids_before = {e["runId"] for e in json.loads(MANIFEST.read_text(encoding="utf-8"))["runs"]}
         cdp.evaluate(f"({CLICK_ARIA_JS})('Run walk-forward')")
-        ok &= check("walk-forward completes with 6 folds", cdp.evaluate(WAIT_WF_JS, timeout=430),
+        ok &= check("walk-forward completes with 3 folds", cdp.evaluate(WAIT_WF_JS, timeout=430),
                     cdp.evaluate(f"({TEXT_JS})('.opt-study-head')"))
         wf_id = (re.search(r"(wf_[0-9a-f]{8})", cdp.evaluate(f"({TEXT_JS})('.opt-study-head')") or "") or [None, None])[1]
         study = json.loads((walkforwards_dir / wf_id / "study.json").read_text(encoding="utf-8")) if wf_id else {}
@@ -242,8 +240,8 @@ def main() -> int:
         ok &= check("summary matches archived fold results",
                     abs((study.get("aggregate", {}).get("total_oos_net_pnl") or 0) - expected_oos) < 1e-6,
                     f"{study.get('aggregate', {}).get('total_oos_net_pnl')} vs {expected_oos}")
-        ok &= check("fold table renders", cdp.evaluate(f"({WAIT_WF_ROWS_JS})(6)"))
-        ok &= check("parameter selection history renders", cdp.evaluate(f"({WAIT_WF_PARAM_ROWS_JS})(6)"))
+        ok &= check("fold table renders", cdp.evaluate(f"({WAIT_WF_ROWS_JS})(3)"))
+        ok &= check("parameter selection history renders", cdp.evaluate(f"({WAIT_WF_PARAM_ROWS_JS})(3)"))
         ok &= check("OOS PnL visualization renders", cdp.evaluate(WAIT_CHART_JS))
 
         # open one OOS run -> publish + dashboard
@@ -292,7 +290,7 @@ def main() -> int:
         open_tab(cdp, "Walk-Forward")
         ok &= check("history lists walk-forward study", cdp.evaluate(f"({WAIT_HISTORY_JS})({json.dumps(wf_id or '')})"))
         cdp.evaluate(f"({CLICK_ARIA_JS})({json.dumps(f'Open walk-forward {wf_id}')})")
-        ok &= check("history restores folds without rerun", cdp.evaluate(f"({WAIT_WF_ROWS_JS})(6)", timeout=70))
+        ok &= check("history restores folds without rerun", cdp.evaluate(f"({WAIT_WF_ROWS_JS})(3)", timeout=70))
 
         # existing Optimization still works
         open_tab(cdp, "Optimize")

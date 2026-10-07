@@ -171,19 +171,21 @@ class BridgeTest(unittest.TestCase):
             },
         )
 
-    def test_dataset_catalog_is_lightweight(self):
+    def test_dataset_catalog_is_logical(self):
         status, body, _ = self._get("/datasets")
         self.assertEqual(status, 200)
-        by_id = {d["id"]: d for d in body["datasets"]}
-        monthly = by_id["XAUUSD_DUKAS_2025_01_ticks.csv"]
-        self.assertEqual(monthly["symbol"], "XAUUSD")
-        self.assertEqual(monthly["start"], "2025-01-01")
-        self.assertEqual(monthly["end"], "2025-01-31")
-        self.assertEqual(monthly["format"], "csv")
-        # No deterministic range from an "ALL" filename.
-        allfile = by_id["XAUUSD_DUKAS_ALL_ticks.csv"]
-        self.assertIsNone(allfile["start"])
-        self.assertIsNone(allfile["end"])
+        self.assertIn("timeframes", body)
+        # Product-facing catalog exposes logical datasets, not monthly CSV files.
+        for d in body["datasets"]:
+            self.assertIn("dataset_id", d)
+            self.assertNotIn("filename", d)
+            self.assertNotIn("path", d)
+        ids = {d["dataset_id"] for d in body["datasets"]}
+        if "xauusd_dukas_ticks" in ids:
+            ds = next(d for d in body["datasets"] if d["dataset_id"] == "xauusd_dukas_ticks")
+            self.assertEqual(ds["symbol"], "XAUUSD")
+            self.assertEqual(ds["provider"], "DUKAS")
+            self.assertIn("15min", ds["supported_timeframes"])
 
     def test_unknown_route_is_structured_404(self):
         status, body, _ = self._get("/nope")

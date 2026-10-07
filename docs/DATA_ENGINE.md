@@ -191,3 +191,70 @@ cache/market_data/candles/
 Candle rule to preserve: `[start, start + 15 minutes)`, left-labeled,
 left-closed; a signal becomes available only after candle completion; no
 look-ahead; execution continues to use tick-level BID/ASK.
+
+---
+
+# Phase 2 — Candle cache + real dataset integration
+
+## Candle cache (derived from canonical ticks only)
+
+```
+cache/market_data/candles/
+  provider=DUKAS/symbol=XAUUSD/timeframe=15min/year=2025/month=01/candles.parquet (+ metadata.json)
+```
+
+- `CANDLE_CACHE_SCHEMA_VERSION = 1`, `CANDLE_BUILDER_VERSION = 1`.
+- Supported timeframes: `1min, 5min, 15min, 30min, 1h, 4h` (must equal the
+  engine-supported set).
+- Columns: `timestamp` + BID `open/high/low/close` + derived ASK
+  `ask_open/ask_high/ask_low/ask_close` (ASK derived from authoritative tick ASK;
+  MID is never used). float64 prices.
+- Built **from Parquet ticks**, never from raw CSV. Bounded memory, atomic
+  (temp in cache → validate → `os.replace`), idempotent (`CACHE HIT` when the
+  tick partition fingerprint + schema + builder version + timeframe are
+  unchanged). Missing candle cache → structured `data_not_prepared`.
+
+## Runner integration
+
+- New runs use a first-class logical dataset: `market.dataset_id` →
+  `cache:<dataset_id>` internally. Legacy `market.data_source` (CSV path) still
+  works unchanged (legacy runs isolated).
+- For logical runs: **execution uses canonical Parquet ticks**; **strategy
+  candles come from the candle cache** (not on-the-fly). Legacy path keeps
+  on-the-fly resampling.
+- Provenance is archived in `config.json` under `data_provenance`
+  (dataset_id, provider, symbol, timeframe, coverage, per-partition tick +
+  candle fingerprints, cache schema/builder versions). The archived
+  `data_source` is the friendly logical id, not the internal `cache:` key.
+- Missing tick/candle cache during a run → `data_not_prepared` (never a silent
+  rebuild, never an ALL fallback).
+
+## Bridge & product
+
+- `GET /datasets` exposes logical datasets (`dataset_id`, symbol, provider,
+  coverage, complete/partial, supported + prepared timeframes, default range) —
+  never monthly CSV files or filesystem paths.
+- `GET /datasets/<id>/ticks?start&end&limit` → read-only raw-tick preview from the
+  canonical logical dataset.
+- Run Setup: dataset selector = `XAUUSD · Dukascopy`; symbol derived/read-only;
+  controlled timeframe dropdown; real date range with a default complete-year
+  (2025-01-01 → 2025-12-31, configuration only — not auto-run); prepared state
+  ("Data Ready" / "Preparation required for <tf>").
+
+## CLI
+
+```
+python -m src.data_engine build-candles [--timeframe 15min] [--force]
+python -m src.data_engine verify-candles [--timeframe 15min]
+python -m src.data_engine inspect
+```
+
+## Verification
+
+- Exact candle parity: cached candles vs on-the-fly resampling from the same
+  tick partition, for every partition × timeframe (13 × 6 = 78), full data.
+- Month-boundary regression: no duplicate/missing/truncated/shifted candle at
+  Jan→Feb, Feb→Mar, Dec→Jan (incl. 4h).
+- Golden: M15 reference candle OHLC (BID/ASK) and the 7-trade / −15.82 January
+  result reproduce through the cached-candle + Parquet-tick path.
+

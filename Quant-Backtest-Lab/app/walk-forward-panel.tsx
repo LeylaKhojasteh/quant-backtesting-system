@@ -112,7 +112,7 @@ export function WalkForwardPanel({ onCompare }: { onCompare: (runIds: string[]) 
   const [knownOptStudies, setKnownOptStudies] = useState<Set<string> | null>(null);
 
   const strategy = strategies.find((s) => s.id === strategyId);
-  const dataset = datasets.find((d) => d.id === datasetId);
+  const dataset = datasets.find((d) => d.dataset_id === datasetId);
 
   const loadCatalogs = useCallback(async () => {
     const [list, data] = await Promise.all([listStrategies(), listDatasets()]);
@@ -123,12 +123,12 @@ export function WalkForwardPanel({ onCompare }: { onCompare: (runIds: string[]) 
     setParamRaws(
       Object.fromEntries(Object.entries(chosenStrategy?.parameters ?? {}).map(([k, d]) => [k, String(d.default ?? '')])),
     );
-    const chosenDataset = data.find((d) => d.start && d.end) ?? data[0];
-    setDatasetId(chosenDataset?.id ?? '');
+    const chosenDataset = data.find((d) => d.complete_years?.length) ?? data[0];
+    setDatasetId(chosenDataset?.dataset_id ?? '');
     if (chosenDataset) {
       setSymbol(chosenDataset.symbol);
-      setStart(chosenDataset.start ?? '');
-      setEnd(chosenDataset.end ?? '');
+      setStart(chosenDataset.default_start ?? '');
+      setEnd(chosenDataset.default_end ?? '');
     }
   }, []);
 
@@ -210,7 +210,7 @@ export function WalkForwardPanel({ onCompare }: { onCompare: (runIds: string[]) 
     try {
       const result = await startWalkForward({
         strategy: strategy.id,
-        market: { symbol, timeframe, start, end, data_source: dataset.path },
+        market: { dataset_id: dataset.dataset_id, symbol, timeframe, start, end },
         execution: { stop_distance: Number(baseStop), take_profit_distance: Number(baseTake) },
         strategy_grid: gridState.strategyGrid,
         execution_grid: gridState.executionGrid,
@@ -300,12 +300,12 @@ export function WalkForwardPanel({ onCompare }: { onCompare: (runIds: string[]) 
           Dataset
           <Select value={datasetId} onValueChange={(id) => {
             setDatasetId(id);
-            const d = datasets.find((x) => x.id === id);
-            if (d) { setSymbol(d.symbol); setStart(d.start ?? ''); setEnd(d.end ?? ''); }
+            const d = datasets.find((x) => x.dataset_id === id);
+            if (d) { setSymbol(d.symbol); setStart(d.default_start ?? ''); setEnd(d.default_end ?? ''); }
           }}>
             <SelectTrigger aria-label="Walk-forward dataset"><SelectValue placeholder="Select dataset" /></SelectTrigger>
             <SelectContent>
-              {datasets.map((d) => <SelectItem key={d.id} value={d.id}>{d.filename}</SelectItem>)}
+              {datasets.map((d) => <SelectItem key={d.dataset_id} value={d.dataset_id}>{d.label}</SelectItem>)}
             </SelectContent>
           </Select>
         </label>

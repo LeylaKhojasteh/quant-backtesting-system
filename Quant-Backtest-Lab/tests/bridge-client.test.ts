@@ -78,14 +78,24 @@ describe('bridge-client.ts - local bridge HTTP boundary', () => {
       return jsonResponse({
         datasets: [
           {
-            id: 'XAUUSD_DUKAS_2025_01_ticks.csv',
-            filename: 'XAUUSD_DUKAS_2025_01_ticks.csv',
-            path: 'data/XAUUSD_DUKAS_2025_01_ticks.csv',
+            dataset_id: 'xauusd_dukas_ticks',
             symbol: 'XAUUSD',
-            format: 'csv',
-            start: '2025-01-01',
-            end: '2025-01-31',
-            bytes: 123,
+            provider: 'DUKAS',
+            provider_label: 'Dukascopy',
+            data_type: 'ticks',
+            timezone: 'UTC',
+            label: 'XAUUSD · Dukascopy',
+            subtitle: 'Tick data · 2025',
+            coverage_start: '2025-01-01 00:00:00+00:00',
+            coverage_end: '2025-12-31 23:59:59+00:00',
+            years: [2025],
+            complete_years: [2025],
+            partial_months: [],
+            supported_timeframes: ['15min'],
+            prepared_timeframes: ['15min'],
+            tick_ready: true,
+            default_start: '2025-01-01',
+            default_end: '2025-12-31',
           },
         ],
       });
@@ -93,7 +103,8 @@ describe('bridge-client.ts - local bridge HTTP boundary', () => {
     const datasets = await listDatasets(fetchImpl);
     assert.equal(datasets.length, 1);
     assert.equal(datasets[0].symbol, 'XAUUSD');
-    assert.equal(datasets[0].start, '2025-01-01');
+    assert.equal(datasets[0].dataset_id, 'xauusd_dukas_ticks');
+    assert.equal(datasets[0].default_start, '2025-01-01');
     assert.ok(calledUrl.endsWith('/datasets'));
   });
 

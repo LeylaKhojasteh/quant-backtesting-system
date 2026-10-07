@@ -182,12 +182,12 @@ def main() -> int:
                     cdp.evaluate(f"({WAIT_TEXT_JS})(['[aria-label=\"Real run strategy\"]','Candle Direction'])"),
                     cdp.evaluate(f"({TEXT_JS})('[aria-label=\"Real run strategy\"]')"))
         ok &= check("dataset catalog loads",
-                    cdp.evaluate(f"({WAIT_TEXT_JS})(['[aria-label=\"Real run dataset\"]','XAUUSD_'])"),
+                    cdp.evaluate(f"({WAIT_TEXT_JS})(['[aria-label=\"Real run dataset\"]','XAUUSD'])"),
                     cdp.evaluate(f"({TEXT_JS})('[aria-label=\"Real run dataset\"]')"))
 
-        # ---- invalid date range -> clean bridge error (fresh page) -----------
+        # ---- out-of-coverage range -> clean structured error (fresh page) ----
         runs_before_err = cdp.evaluate("document.querySelectorAll('.run-source button').length")
-        set_dates(cdp, "2025-03-05", "2025-03-05")
+        set_dates(cdp, "2024-05-05", "2024-05-05")
         cdp.evaluate(f"({WAIT_ENABLED_JS})")
         cdp.evaluate(CLICK_RUN_JS)
         err_shown = False

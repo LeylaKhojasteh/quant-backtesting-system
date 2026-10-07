@@ -60,6 +60,9 @@ class MarketRequest:
     start: str | None = None
     end: str | None = None
     data_source: str = ""
+    #: Optional first-class logical dataset id (Data Engine). When present the run
+    #: resolves via the derived tick/candle cache rather than a raw filesystem path.
+    dataset_id: str | None = None
 
 
 @dataclass
@@ -296,16 +299,23 @@ def parse_request_payload(payload) -> BacktestRunRequest:
     raw_market = payload.get("market")
     if not isinstance(raw_market, dict):
         raise InvalidDatasetError("market is required")
-    market_unknown = sorted(set(raw_market) - {"symbol", "timeframe", "start", "end", "data_source"})
+    market_unknown = sorted(set(raw_market) - {"symbol", "timeframe", "start", "end", "data_source", "dataset_id"})
     if market_unknown:
         raise InvalidDatasetError(f"unknown market field(s): {market_unknown}")
     symbol = raw_market.get("symbol")
     data_source = raw_market.get("data_source")
+    dataset_id = raw_market.get("dataset_id")
     timeframe = raw_market.get("timeframe", "15min")
     if not isinstance(symbol, str) or not symbol.strip():
         raise InvalidDatasetError("market.symbol is required")
+    if dataset_id is not None:
+        if not isinstance(dataset_id, str) or not dataset_id.strip():
+            raise InvalidDatasetError("market.dataset_id must be a non-empty string")
+        # Logical dataset reference resolves through the derived data engine.
+        if data_source is None:
+            data_source = f"cache:{dataset_id.strip()}"
     if not isinstance(data_source, str) or not data_source.strip():
-        raise InvalidDatasetError("market.data_source is required")
+        raise InvalidDatasetError("market.data_source or market.dataset_id is required")
     if not isinstance(timeframe, str) or not timeframe.strip():
         raise InvalidDatasetError("market.timeframe must be a non-empty string")
     if timeframe.strip() not in SUPPORTED_TIMEFRAME_VALUES:
@@ -343,6 +353,7 @@ def parse_request_payload(payload) -> BacktestRunRequest:
             start=raw_market.get("start"),
             end=raw_market.get("end"),
             data_source=data_source.strip(),
+            dataset_id=dataset_id.strip() if isinstance(dataset_id, str) and dataset_id.strip() else None,
         ),
         execution=ExecutionRequest(stop_distance=stop_distance, take_profit_distance=take_profit),
         account=account,
@@ -390,6 +401,7 @@ def build_run_config(
             "start": start,
             "end": end,
             "data_source": request.market.data_source,
+            "dataset_id": request.market.dataset_id,
             "data_fingerprint": data_fingerprint,
         },
         "execution": {

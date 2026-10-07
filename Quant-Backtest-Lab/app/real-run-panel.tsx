@@ -95,7 +95,7 @@ export function RealRunPanel() {
   const importInFlight = useRef(false);
 
   const strategy = strategies.find((s) => s.id === strategyId);
-  const dataset = datasets.find((d) => d.id === datasetId);
+  const dataset = datasets.find((d) => d.dataset_id === datasetId);
   const loadingCatalogs = connected && strategies.length === 0 && !catalogError;
 
   // Select one strategy id (falling back to candle_direction/first) and load
@@ -128,12 +128,12 @@ export function RealRunPanel() {
       );
       setCatalogError(null);
       applyStrategySelection(list, strategyIdRef.current || undefined);
-      const nextDataset = data.find((d) => d.start && d.end) ?? data[0];
-      setDatasetId(nextDataset?.id ?? '');
+      const nextDataset = data.find((d) => d.complete_years?.length) ?? data[0];
+      setDatasetId(nextDataset?.dataset_id ?? '');
       if (nextDataset) {
         setSymbol(nextDataset.symbol);
-        setStart(nextDataset.start ?? '');
-        setEnd(nextDataset.end ?? '');
+        setStart(nextDataset.default_start ?? '');
+        setEnd(nextDataset.default_end ?? '');
       }
     } catch (err) {
       setCatalogError(err instanceof Error ? err.message : 'catalog unavailable');
@@ -175,12 +175,9 @@ export function RealRunPanel() {
         warnings.push(`strategy "${wanted}" is not in the catalog`);
       }
 
-      const datasetName = detail.market?.dataset ?? null;
-      const ds = datasets.find((d) => d.filename === datasetName || d.id === datasetName);
+      const ds = datasets.find((d) => d.dataset_id === (detail.market?.dataset_id ?? ''));
       if (ds) {
-        setDatasetId(ds.id);
-      } else if (datasetName) {
-        warnings.push(`dataset "${datasetName}" is not available`);
+        setDatasetId(ds.dataset_id);
       }
       if (detail.market?.symbol) setSymbol(detail.market.symbol);
       if (detail.market?.timeframe) setTimeframe(detail.market.timeframe);
@@ -238,11 +235,11 @@ export function RealRunPanel() {
 
   const selectDataset = (id: string) => {
     setDatasetId(id);
-    const chosen = datasets.find((d) => d.id === id);
+    const chosen = datasets.find((d) => d.dataset_id === id);
     if (chosen) {
       setSymbol(chosen.symbol);
-      setStart(chosen.start ?? '');
-      setEnd(chosen.end ?? '');
+      setStart(chosen.default_start ?? '');
+      setEnd(chosen.default_end ?? '');
       if (accountEnabled) applyInstrumentFor(chosen.symbol);
     }
   };
@@ -357,11 +354,11 @@ export function RealRunPanel() {
       const response = await submitRun({
         strategy: { selector: strategy.id, parameters },
         market: {
+          dataset_id: dataset.dataset_id,
           symbol,
           timeframe,
           start,
           end,
-          data_source: dataset.path,
         },
         execution: {
           stop_distance: Number(stop),
@@ -493,8 +490,8 @@ export function RealRunPanel() {
             </SelectTrigger>
             <SelectContent>
               {datasets.map((d) => (
-                <SelectItem key={d.id} value={d.id}>
-                  {d.filename}
+                <SelectItem key={d.dataset_id} value={d.dataset_id}>
+                  {d.label}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -519,6 +516,13 @@ export function RealRunPanel() {
           <span className="date-to">to</span>
           <input type="date" value={end} onChange={(e) => setEnd(e.target.value)} aria-label="Run end date" />
         </label>
+        {dataset && (
+          <p className="rr-help" aria-label="Dataset status">
+            Coverage {String(dataset.coverage_start).slice(0, 10)} → {String(dataset.coverage_end).slice(0, 10)} ·{' '}
+            {dataset.prepared_timeframes.includes(timeframe) ? 'Data Ready' : `Preparation required for ${timeframe}`}
+            {dataset.partial_months.length ? ` · partial: ${dataset.partial_months.join(', ')}` : ''}
+          </p>
+        )}
       </fieldset>
 
       {reuseWarning && (

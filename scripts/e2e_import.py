@@ -214,7 +214,7 @@ def main() -> int:
         ok &= check("trusted file strategy also in catalog", "Threshold Direction" in catalog_before,
                     str(catalog_before))
         # dataset catalog must be ready before a run
-        cdp.evaluate(f"({WAIT_TEXT_JS})(['[aria-label=\"Real run dataset\"]','XAUUSD_'])")
+        cdp.evaluate(f"({WAIT_TEXT_JS})(['[aria-label=\"Real run dataset\"]','XAUUSD'])")
 
         # ---- import a valid strategy -----------------------------------------
         files_before_dir = sorted(p.name for p in strategy_dir.iterdir())

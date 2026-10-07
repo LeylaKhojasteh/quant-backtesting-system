@@ -53,6 +53,27 @@ DEFAULT_CHUNK_ROWS = 1_000_000
 #: the digest is independent of read chunking (only row content matters).
 VERIFY_BLOCK_ROWS = 500_000
 
+# ---------------------------------------------------------------------------
+# Candle cache (Phase 2) — derived from canonical tick partitions only.
+# ---------------------------------------------------------------------------
+
+CANDLE_CACHE_SCHEMA_VERSION = 1
+CANDLE_BUILDER_VERSION = 1
+#: Canonical supported timeframes (pandas offset aliases). Must match the
+#: engine-supported set; asserted in tests.
+SUPPORTED_CANDLE_TIMEFRAMES: tuple[str, ...] = ("1min", "5min", "15min", "30min", "1h", "4h")
+
+CANDLE_COLUMNS = (
+    "timestamp",
+    "open", "high", "low", "close",
+    "ask_open", "ask_high", "ask_low", "ask_close",
+)
+CANDLE_ARROW_SCHEMA = pa.schema([
+    ("timestamp", pa.timestamp("ns", tz="UTC")),
+    ("open", pa.float64()), ("high", pa.float64()), ("low", pa.float64()), ("close", pa.float64()),
+    ("ask_open", pa.float64()), ("ask_high", pa.float64()), ("ask_low", pa.float64()), ("ask_close", pa.float64()),
+])
+
 ARROW_SCHEMA = pa.schema([
     ("timestamp", pa.timestamp("ns", tz="UTC")),
     ("bid", pa.float64()),
@@ -783,6 +804,40 @@ def cache_fingerprint(source: str, *, symbol: str | None = None, start: str | No
     return "sha256:" + hashlib.sha256("|".join(parts).encode()).hexdigest()
 
 
+def data_provenance(source: str, *, symbol: str | None = None, timeframe: str | None = None,
+                    start: str | None = None, end: str | None = None,
+                    root: str | Path = DEFAULT_CACHE_ROOT) -> dict:
+    """Reproducibility record for the derived data used by a run (archive only)."""
+    ds = _resolve_dataset(source, symbol=symbol, root=root)
+    start_ts, end_exclusive = resolve_range(start, end)
+    months = _months_between(start_ts, end_exclusive, ds.get("months", []))
+    partitions = []
+    for label in months:
+        year, month = (int(x) for x in label.split("-"))
+        pid = PartitionId(ds["provider"], ds["symbol"], year, month)
+        tm = _read_json(partition_metadata(root, pid), {})
+        entry = {
+            "month": label,
+            "source_relative_path": tm.get("source_relative_path"),
+            "source_sha256": tm.get("source_sha256"),
+            "tick_partition_fingerprint": _tick_partition_fingerprint(tm) if tm else None,
+        }
+        if timeframe:
+            cm = _read_json(candle_partition_metadata(root, pid, timeframe), {})
+            entry["candle_partition_fingerprint"] = cm.get("candle_fingerprint")
+        partitions.append(entry)
+    return {
+        "dataset_id": ds.get("dataset_id"), "provider": ds.get("provider"),
+        "symbol": ds.get("symbol"), "timeframe": timeframe,
+        "requested_start": start, "requested_end": end,
+        "coverage_start": ds.get("coverage_start"), "coverage_end": ds.get("coverage_end"),
+        "tick_cache_schema": DATA_CACHE_SCHEMA_VERSION,
+        "candle_cache_schema": CANDLE_CACHE_SCHEMA_VERSION,
+        "candle_builder_version": CANDLE_BUILDER_VERSION,
+        "partitions": partitions,
+    }
+
+
 def select_partitions(symbol: str, start: str | None, end: str | None,
                       root: str | Path = DEFAULT_CACHE_ROOT) -> list[str]:
     """Months whose partition files are needed for the inclusive date range."""
@@ -834,6 +889,236 @@ def load_ticks_frame(
 
 # Back-compat alias used by the run boundary.
 load_ticks = load_ticks_frame
+
+
+# --------------------------------------------------------------------------
+# Candle cache (derived from canonical tick partitions; never from raw CSV)
+# --------------------------------------------------------------------------
+
+
+def candle_partition_dir(root: str | Path, pid: PartitionId, timeframe: str) -> Path:
+    return (Path(root) / "candles" / f"provider={pid.provider}" / f"symbol={pid.symbol}"
+            / f"timeframe={timeframe}" / f"year={pid.year}" / f"month={pid.month:02d}")
+
+
+def candle_partition_parquet(root: str | Path, pid: PartitionId, timeframe: str) -> Path:
+    return candle_partition_dir(root, pid, timeframe) / "candles.parquet"
+
+
+def candle_partition_metadata(root: str | Path, pid: PartitionId, timeframe: str) -> Path:
+    return candle_partition_dir(root, pid, timeframe) / "metadata.json"
+
+
+def _tick_partition_fingerprint(tick_meta: dict) -> str:
+    return f"v{tick_meta.get('schema_version')}:{tick_meta.get('source_sha256')}"
+
+
+def candle_fingerprint(pid: PartitionId, timeframe: str, tick_meta: dict) -> str:
+    payload = f"v{CANDLE_CACHE_SCHEMA_VERSION}:b{CANDLE_BUILDER_VERSION}:{timeframe}:{_tick_partition_fingerprint(tick_meta)}"
+    return "sha256:" + hashlib.sha256(payload.encode()).hexdigest()
+
+
+def build_candles_from_ticks(tick_frame: pd.DataFrame, timeframe: str) -> pd.DataFrame:
+    """The exact verified candle frame (BID OHLC + derived ASK OHLC).
+
+    Reproduces ``ticks.set_index('timestamp')['bid'].resample(tf).ohlc().dropna()``
+    (left-labeled, left-closed, no gap fill) and adds ASK OHLC derived from the
+    authoritative tick ASK (never MID).
+    """
+    s = tick_frame.set_index("timestamp")
+    bid = s["bid"].resample(timeframe).ohlc().dropna()
+    ask = s["ask"].resample(timeframe).ohlc().dropna().reindex(bid.index)
+    out = pd.DataFrame({"timestamp": bid.index})
+    for c in ("open", "high", "low", "close"):
+        out[c] = bid[c].to_numpy(dtype="float64")
+        out[f"ask_{c}"] = ask[c].to_numpy(dtype="float64")
+    return out[list(CANDLE_COLUMNS)]
+
+
+def _read_tick_partitions(root: str | Path, pid: PartitionId) -> pd.DataFrame:
+    parquet = partition_parquet(root, pid)
+    if not parquet.is_file():
+        raise PartitionMissingError(
+            f"canonical tick partition missing for {pid.label}; run `build` first")
+    return pq.read_table(parquet, columns=["timestamp", "bid", "ask"]).to_pandas()
+
+
+def build_candle_partition(
+    pid: PartitionId,
+    timeframe: str,
+    *,
+    root: str | Path = DEFAULT_CACHE_ROOT,
+    force: bool = False,
+) -> dict:
+    if timeframe not in SUPPORTED_CANDLE_TIMEFRAMES:
+        raise DataEngineError(f"unsupported candle timeframe: {timeframe}")
+    tick_meta = _read_json(partition_metadata(root, pid), {})
+    if not tick_meta:
+        raise PartitionMissingError(f"canonical tick partition metadata missing for {pid.label}")
+    fp = candle_fingerprint(pid, timeframe, tick_meta)
+    parquet = candle_partition_parquet(root, pid, timeframe)
+    meta = candle_partition_metadata(root, pid, timeframe)
+    if (not force and parquet.is_file() and meta.is_file()):
+        m = _read_json(meta, {})
+        if m.get("candle_fingerprint") == fp and m.get("schema_version") == CANDLE_CACHE_SCHEMA_VERSION \
+                and _partition_last_row(parquet) == m.get("rows"):
+            return {"status": "CACHE HIT", "partition": f"{pid.label}/{timeframe}", "rows": m.get("rows")}
+
+    _ensure_writable(candle_partition_dir(root, pid, timeframe))
+    ticks = _read_tick_partitions(root, pid)
+    candles = build_candles_from_ticks(ticks, timeframe)
+    rows = len(candles)
+    tmp = parquet.with_name(parquet.name + f".tmp-{os.getpid()}")
+    writer = None
+    try:
+        writer = pq.ParquetWriter(tmp, CANDLE_ARROW_SCHEMA, compression="zstd")
+        writer.write_table(pa.Table.from_pandas(candles, schema=CANDLE_ARROW_SCHEMA, preserve_index=False))
+        writer.close()
+        writer = None
+        os.replace(tmp, parquet)
+    except Exception:
+        if writer is not None:
+            try:
+                writer.close()
+            except Exception:  # noqa: BLE001
+                pass
+        raise
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+    first = str(candles["timestamp"].iloc[0]) if rows else None
+    last = str(candles["timestamp"].iloc[-1]) if rows else None
+    meta_doc = {
+        "schema_version": CANDLE_CACHE_SCHEMA_VERSION,
+        "candle_builder_version": CANDLE_BUILDER_VERSION,
+        "provider": pid.provider, "symbol": pid.symbol, "timeframe": timeframe,
+        "year": pid.year, "month": pid.month, "rows": rows,
+        "first_timestamp": first, "last_timestamp": last,
+        "candle_fingerprint": fp,
+        "tick_partition": f"ticks/provider={pid.provider}/symbol={pid.symbol}/year={pid.year}/month={pid.month:02d}/ticks.parquet",
+        "tick_partition_fingerprint": _tick_partition_fingerprint(tick_meta),
+        "source_relative_path": tick_meta.get("source_relative_path"),
+        "source_sha256": tick_meta.get("source_sha256"),
+        "columns": list(CANDLE_COLUMNS),
+    }
+    _atomic_write_text(meta, json.dumps(meta_doc, indent=2, ensure_ascii=False))
+    return {"status": "BUILT", "partition": f"{pid.label}/{timeframe}", "rows": rows}
+
+
+def _digest_candles(frame: pd.DataFrame) -> str:
+    digest = hashlib.sha256()
+    digest.update(int(len(frame)).to_bytes(8, "little"))
+    ts = frame["timestamp"].dt.tz_convert("UTC").dt.tz_localize(None).astype("datetime64[ns]").astype("int64").to_numpy()
+    digest.update(np.ascontiguousarray(ts, dtype="int64").tobytes())
+    for c in CANONICAL_CANDLE_VALUE_COLUMNS:
+        digest.update(np.ascontiguousarray(frame[c].to_numpy(), dtype="float64").tobytes())
+    return digest.hexdigest()
+
+
+CANONICAL_CANDLE_VALUE_COLUMNS = ("open", "high", "low", "close", "ask_open", "ask_high", "ask_low", "ask_close")
+
+
+def verify_candle_partition(
+    pid: PartitionId,
+    timeframe: str,
+    *,
+    root: str | Path = DEFAULT_CACHE_ROOT,
+) -> dict:
+    parquet = candle_partition_parquet(root, pid, timeframe)
+    if not parquet.is_file():
+        raise PartitionMissingError(f"candle partition missing: {pid.label}/{timeframe}")
+    ticks = _read_tick_partitions(root, pid)
+    onthefly = build_candles_from_ticks(ticks, timeframe)
+    cached = pq.read_table(parquet, columns=list(CANDLE_COLUMNS)).to_pandas()
+    return {
+        "partition": f"{pid.label}/{timeframe}",
+        "onthefly_rows": len(onthefly), "cached_rows": len(cached),
+        "row_count_parity": len(onthefly) == len(cached),
+        "value_parity": _digest_candles(onthefly) == _digest_candles(cached),
+        "first_timestamp": str(onthefly["timestamp"].iloc[0]) if len(onthefly) else None,
+        "last_timestamp": str(onthefly["timestamp"].iloc[-1]) if len(onthefly) else None,
+    }
+
+
+def build_all_candles(data_dir: str | Path = DEFAULT_DATA_DIR, root: str | Path = DEFAULT_CACHE_ROOT,
+                      *, timeframe: str | None = None, force: bool = False) -> list[dict]:
+    timeframes = (timeframe,) if timeframe else SUPPORTED_CANDLE_TIMEFRAMES
+    results = []
+    for _, pid in discover_partitions(data_dir):
+        for tf in timeframes:
+            results.append(build_candle_partition(pid, tf, root=root, force=force))
+    return results
+
+
+def verify_all_candles(data_dir: str | Path = DEFAULT_DATA_DIR, root: str | Path = DEFAULT_CACHE_ROOT,
+                       *, timeframe: str | None = None) -> list[dict]:
+    timeframes = (timeframe,) if timeframe else SUPPORTED_CANDLE_TIMEFRAMES
+    results = []
+    for _, pid in discover_partitions(data_dir):
+        for tf in timeframes:
+            results.append(verify_candle_partition(pid, tf, root=root))
+    return results
+
+
+def load_candles_frame(
+    source: str,
+    *,
+    timeframe: str,
+    symbol: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    root: str | Path = DEFAULT_CACHE_ROOT,
+) -> pd.DataFrame:
+    """Load cached candles as the verified strategy frame (bid OHLC, timestamp index).
+
+    Identical in shape/values to ``ticks.set_index('timestamp')['bid'].resample(tf).ohlc().dropna()``
+    for the requested inclusive calendar range. Missing candle cache → structured error.
+    """
+    if timeframe not in SUPPORTED_CANDLE_TIMEFRAMES:
+        raise DataEngineError(f"unsupported candle timeframe: {timeframe}")
+    ds = _resolve_dataset(source, symbol=symbol, root=root)
+    start_ts, end_exclusive = resolve_range(start, end)
+    months = _months_between(start_ts, end_exclusive, ds.get("months", []))
+    if not months:
+        raise CoverageError(f"requested range {start}..{end} is outside cached coverage")
+    frames = []
+    for label in months:
+        year, month = (int(x) for x in label.split("-"))
+        pid = PartitionId(ds["provider"], ds["symbol"], year, month)
+        parquet = candle_partition_parquet(root, pid, timeframe)
+        if not parquet.is_file():
+            raise PartitionMissingError(
+                f"candle cache not prepared for {ds['symbol']} {timeframe} {label}; "
+                f"run `build candles` first")
+        frames.append(pq.read_table(parquet, columns=list(CANDLE_COLUMNS)).to_pandas())
+    frame = pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
+    if start_ts is not None:
+        frame = frame[frame["timestamp"] >= start_ts]
+    if end_exclusive is not None:
+        frame = frame[frame["timestamp"] < end_exclusive]
+    frame = frame.sort_values("timestamp", kind="stable").reset_index(drop=True)
+    if frame.empty:
+        raise CoverageError(f"no cached candles for {source} {timeframe} in {start}..{end}")
+    return frame.set_index("timestamp")[["open", "high", "low", "close"]]
+
+
+def prepared_timeframes(source: str, *, symbol: str | None = None,
+                        root: str | Path = DEFAULT_CACHE_ROOT) -> list[str]:
+    ds = _resolve_dataset(source, symbol=symbol, root=root)
+    out = []
+    for tf in SUPPORTED_CANDLE_TIMEFRAMES:
+        ok = True
+        for label in ds.get("months", []):
+            year, month = (int(x) for x in label.split("-"))
+            if not candle_partition_parquet(root, PartitionId(ds["provider"], ds["symbol"], year, month), tf).is_file():
+                ok = False
+                break
+        if ok and ds.get("months"):
+            out.append(tf)
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -1006,6 +1291,8 @@ def _cmd_inspect(args) -> int:
     print(f"  ALL missing ticks vs 2025:      {s['aggregate_missing_ticks_vs_monthly_2025']}")
     print(f"  coverage:                       {s['coverage_start']} -> {s['coverage_end']}")
     print(f"  partial months:                 {s['partial_months']}")
+    prepared = prepared_timeframes("cache:", symbol=s.get("symbol"), root=args.root)
+    print(f"  prepared candle timeframes:     {prepared if prepared else 'none (run build-candles)'}")
     return 0
 
 
@@ -1018,6 +1305,24 @@ def _cmd_bench(args) -> int:
 def _cmd_golden(args) -> int:
     print(json.dumps(golden_january(args.data, args.root), indent=2))
     return 0
+
+
+def _cmd_build_candles(args) -> int:
+    results = build_all_candles(args.data, args.root, timeframe=args.timeframe, force=args.force)
+    built = sum(1 for r in results if r["status"] == "BUILT")
+    hit = sum(1 for r in results if r["status"] == "CACHE HIT")
+    print(f"candles built={built} cache_hits={hit} total={len(results)}")
+    return 0
+
+
+def _cmd_verify_candles(args) -> int:
+    results = verify_all_candles(args.data, args.root, timeframe=args.timeframe)
+    ok = True
+    for r in results:
+        good = r["row_count_parity"] and r["value_parity"]
+        ok &= good
+    print(f"candle partitions verified={sum(1 for r in results if r['row_count_parity'] and r['value_parity'])}/{len(results)} all_ok={ok}")
+    return 0 if ok else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1052,6 +1357,15 @@ def main(argv: list[str] | None = None) -> int:
 
     p_golden = sub.add_parser("golden", help="January golden CSV vs Parquet parity")
     p_golden.set_defaults(fn=_cmd_golden)
+
+    p_bc = sub.add_parser("build-candles", help="build/update derived candle partitions")
+    p_bc.add_argument("--timeframe", help="only this timeframe (default: all supported)")
+    p_bc.add_argument("--force", action="store_true")
+    p_bc.set_defaults(fn=_cmd_build_candles)
+
+    p_vc = sub.add_parser("verify-candles", help="exact on-the-fly vs cached candle parity")
+    p_vc.add_argument("--timeframe", help="only this timeframe (default: all supported)")
+    p_vc.set_defaults(fn=_cmd_verify_candles)
 
     args = parser.parse_args(argv)
     try:

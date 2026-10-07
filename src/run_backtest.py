@@ -194,17 +194,22 @@ def execute_run(
 
     import pandas as pd  # local import: contract/store modules stay dependency-free
 
-    data_path = Path(request.market.data_source)
+    data_source = str(request.market.data_source)
+    data_path = Path(data_source)
+    cache_run = data_source.startswith("cache:")
     try:
-        if str(request.market.data_source).startswith("cache:"):
-            # Derived Parquet tick store (Data Engine). The engine still receives
-            # the same canonical tick frame; src/backtest.py is untouched.
+        timeframe = request.market.timeframe
+        if timeframe not in run_request.SUPPORTED_TIMEFRAME_VALUES:
+            raise run_errors.UnsupportedTimeframeError(
+                "unsupported timeframe; supported: "
+                + ", ".join(run_request.SUPPORTED_TIMEFRAME_VALUES)
+            )
+        if cache_run:
+            # Canonical Parquet ticks are the execution source (Data Engine).
             from src import data_engine
             ticks = data_engine.load_ticks_frame(
-                request.market.data_source,
-                symbol=request.market.symbol,
-                start=request.market.start,
-                end=request.market.end,
+                data_source, symbol=request.market.symbol,
+                start=request.market.start, end=request.market.end,
             )
         elif data_path.is_file():
             ticks = _load_ticks(data_path)
@@ -221,18 +226,24 @@ def execute_run(
         ticks = ticks.sort_values("timestamp", kind="stable").reset_index(drop=True)
         if ticks.empty:
             raise run_errors.InvalidDatasetError(
-                f"no ticks in {data_path} for the requested range"
+                f"no ticks in {data_source} for the requested range"
             )
-        timeframe = request.market.timeframe
-        if timeframe not in run_request.SUPPORTED_TIMEFRAME_VALUES:
-            raise run_errors.UnsupportedTimeframeError(
-                "unsupported timeframe; supported: "
-                + ", ".join(run_request.SUPPORTED_TIMEFRAME_VALUES)
+        if cache_run:
+            # Strategy candles come from the derived candle cache (never raw CSV,
+            # never on-the-fly) for logical-dataset runs.
+            candles = data_engine.load_candles_frame(
+                data_source, timeframe=timeframe, symbol=request.market.symbol,
+                start=request.market.start, end=request.market.end,
             )
-        candles = ticks.set_index("timestamp")["bid"].resample(timeframe).ohlc().dropna()
+        else:
+            candles = ticks.set_index("timestamp")["bid"].resample(timeframe).ohlc().dropna()
     except run_errors.RunError:
         raise
     except Exception as exc:
+        if cache_run:
+            from src import data_engine
+            if isinstance(exc, data_engine.DataEngineError):
+                raise run_errors.DataNotPreparedError(str(exc)) from exc
         raise run_errors.InvalidDatasetError(f"failed to load dataset {data_path}: {exc}") from exc
 
     # Hand the strategy its effective parameters, then generate normalized
@@ -263,6 +274,9 @@ def execute_run(
     start_iso = ticks["timestamp"].iloc[0].isoformat().replace("+00:00", "Z")
     end_iso = ticks["timestamp"].iloc[-1].isoformat().replace("+00:00", "Z")
 
+    # Archived data source: a friendly logical id for Data Engine runs (never the
+    # internal `cache:` resolver key), else the raw path (legacy runs).
+    archive_source = request.market.dataset_id if cache_run else str(data_path)
     result = BacktestResult(
         contract_version=CONTRACT_VERSION,
         run_id=run_id or f"run_{uuid.uuid4().hex[:8]}",
@@ -274,14 +288,14 @@ def execute_run(
             start=start_iso,
             end=end_iso,
             parameters=effective_parameters,
-            data_source=str(data_path),
+            data_source=archive_source,
             data_fingerprint=_data_fingerprint(request.market),
         ),
         trades=records,
         equity=equity,
         metrics=metrics,
         data_quality=DataQuality(
-            data_source=str(data_path),
+            data_source=archive_source,
             tick_count=len(ticks),
             candle_count=len(candles),
             validation={"signals_valid": True},
@@ -327,6 +341,13 @@ def execute_run(
         end=result.config.end,
         instrument=resolved_instrument,
     )
+    if cache_run:
+        from src import data_engine
+        config["market"]["data_source"] = archive_source
+        config["data_provenance"] = data_engine.data_provenance(
+            data_source, symbol=request.market.symbol, timeframe=request.market.timeframe,
+            start=request.market.start, end=request.market.end,
+        )
     strategy_source = None
     if strategy_path is not None and strategy_path.is_file():
         # Archive the actual strategy file for a generic (path-loaded) strategy.

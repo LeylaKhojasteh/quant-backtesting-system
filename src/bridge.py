@@ -49,6 +49,7 @@ import json
 import re
 import sys
 import traceback
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote
@@ -119,6 +120,68 @@ def list_datasets(data_dir: str | Path = DEFAULT_DATA_DIR) -> list[dict]:
     if not base.is_dir():
         return []
     return [_dataset_entry(p) for p in sorted(base.glob("*.csv")) if p.is_file()]
+
+
+_PROVIDER_LABEL = {"DUKAS": "Dukascopy"}
+
+
+def logical_datasets() -> list[dict]:
+    """Product-facing logical datasets (Data Engine), not monthly CSV files."""
+    from src import data_engine
+    catalog = data_engine.load_catalog().get("datasets", {})
+    out = []
+    for ds in catalog.values():
+        months = ds.get("months", [])
+        partial = ds.get("partial_months", [])
+        years = ds.get("years", [])
+        complete_years = sorted({int(m[:4]) for m in months if m not in partial})
+        provider = ds.get("provider", "")
+        label_provider = _PROVIDER_LABEL.get(provider, provider)
+        prepared = data_engine.prepared_timeframes("cache:", symbol=ds.get("symbol"))
+        default_start = f"{min(complete_years)}-01-01" if complete_years else ds.get("coverage_start")
+        default_end = f"{max(complete_years)}-12-31" if complete_years else ds.get("coverage_end")
+        out.append({
+            "dataset_id": ds.get("dataset_id"),
+            "symbol": ds.get("symbol"),
+            "provider": provider,
+            "provider_label": label_provider,
+            "data_type": ds.get("data_type"),
+            "timezone": ds.get("timezone"),
+            "label": f"{ds.get('symbol')} · {label_provider}",
+            "subtitle": f"Tick data · {', '.join(str(y) for y in years)}",
+            "coverage_start": ds.get("coverage_start"),
+            "coverage_end": ds.get("coverage_end"),
+            "years": years,
+            "complete_years": complete_years,
+            "partial_months": partial,
+            "supported_timeframes": list(data_engine.SUPPORTED_CANDLE_TIMEFRAMES),
+            "prepared_timeframes": prepared,
+            "tick_ready": bool(months),
+            "default_start": default_start,
+            "default_end": default_end,
+        })
+    return out
+
+
+def dataset_ticks_preview(dataset_id: str, start: str | None, end: str | None, limit: int = 25) -> dict:
+    """Read-only raw-tick preview from the canonical logical dataset (never demo)."""
+    from src import data_engine
+    limit = max(1, min(int(limit), 200))
+    frame = data_engine.load_ticks_frame(
+        f"cache:{dataset_id}", symbol=None, start=start, end=end)
+    head = frame.head(limit)
+    rows = [
+        {
+            "timestamp": str(r.timestamp),
+            "bid": float(r.bid),
+            "ask": float(r.ask),
+            "bid_volume": float(r.bid_volume),
+            "ask_volume": float(r.ask_volume),
+            "spread": float(r.ask) - float(r.bid),
+        }
+        for r in head.itertuples(index=False)
+    ]
+    return {"dataset_id": dataset_id, "rows": rows, "count": int(len(frame))}
 
 
 def _error_for(exc: Exception) -> tuple[int, str, str]:
@@ -246,12 +309,20 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 self._send_json(200, {"strategies": list_strategies(self._config["strategy_dir"])})
             elif route == "/datasets":
                 self._send_json(200, {
-                    "datasets": list_datasets(self._config["data_dir"]),
+                    "datasets": logical_datasets(),
                     "timeframes": [
                         {"value": value, "label": label}
                         for value, label in run_request.SUPPORTED_TIMEFRAMES
                     ],
                 })
+            elif len(parts) == 3 and parts[0] == "datasets" and parts[2] == "ticks":
+                query = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+                self._send_json(200, dataset_ticks_preview(
+                    urllib.parse.unquote(parts[1]),
+                    (query.get("start") or [None])[0],
+                    (query.get("end") or [None])[0],
+                    int((query.get("limit") or ["25"])[0]),
+                ))
             elif route == "/instruments":
                 self._send_json(200, {"instruments": accounting.instrument_catalog()})
             elif route == "/runs":
