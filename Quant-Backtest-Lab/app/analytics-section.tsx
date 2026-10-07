@@ -564,13 +564,14 @@ export function ExitQualityTable({ rows }: { rows: readonly EnrichedTrade[] }) {
   );
 }
 
-export function ResearchAnalytics() {
+export function ResearchAnalytics({ group = 'all' }: { group?: string }) {
   const state = useRun();
   const run = state.status === 'ready' ? state.run : null;
   const rows = useMemo(() => run ? enrichRunTrades(run) : [], [run]);
   const totalSignals = run?.dataQuality.candles ?? rows.length;
   const p = useMemo(() => rows.length ? performance(rows) : { expectancy: 0, payoff: 0 }, [rows]);
   const r = useMemo(() => rows.length ? risk(rows) : { maxLosingStreak: 0, recoveryFactor: 0 }, [rows]);
+  const show = (g: string) => group === 'all' || group === g;
 
   if (state.status !== 'ready') {
     return (
@@ -583,7 +584,9 @@ export function ResearchAnalytics() {
             ? 'Loading reference run…'
             : state.status === 'error'
               ? state.error
-              : state.message}
+              : state.status === 'empty'
+                ? 'No run selected — configure and run a real backtest.'
+                : state.message}
         </p>
       </div>
     );
@@ -591,47 +594,67 @@ export function ResearchAnalytics() {
 
   return (
     <>
-      <div className="research-kpis">
-        {[
-          ['Expectancy', fmt(p.expectancy), 'Average expected PnL per trade · price terms'],
-          ['Payoff ratio', p.payoff.toFixed(2), 'Average win divided by average loss · price terms'],
-          ['Max losing streak', String(r.maxLosingStreak), 'Longest run of consecutive losing trades'],
-          ['Recovery factor', r.recoveryFactor.toFixed(2), 'Net PnL divided by maximum closed-trade drawdown · price terms'],
-        ].map(([label, value, note]) => (
-          <div key={label}>
-            <span>{label}</span>
-            <strong>{value}</strong>
-            <small>{note}</small>
-          </div>
-        ))}
-      </div>
-      <Section icon={<AreaChart size={16} />} title="Equity Analysis" note="closed-trade series · price terms">
-        <EquityAnalysis rows={rows} />
-      </Section>
-      <Section icon={<BarChart3 size={16} />} title="Trade Distribution" note="seeded trade set">
-        <DistributionAnalysis rows={rows} />
-      </Section>
-      <Section icon={<LineChart size={16} />} title="Direction Analysis" note="LONG vs SHORT">
-        <DirectionAnalysis rows={rows} />
-      </Section>
-      <Section icon={<PieChart size={16} />} title="Exit Analysis" note="TP / SL / END_OF_DATA mix">
-        <ExitAnalysis rows={rows} />
-      </Section>
-      <Section icon={<AreaChart size={16} />} title="Performance & Trade Quality" note="risk-adjusted returns · R multiples · excursions">
-        <PerformanceQuality rows={rows} />
-      </Section>
-      <Section icon={<TrendingUp size={16} />} title="Drawdown Analysis" note="depth · duration · recovery">
-        <DrawdownQuality rows={rows} />
-      </Section>
-      <Section icon={<LineChart size={16} />} title="Signal Analysis" note="generated vs executed">
-        <SignalQuality rows={rows} totalSignals={totalSignals} />
-      </Section>
-      <Section icon={<BarChart3 size={16} />} title="Entry Analysis" note="entries by hour · UTC">
-        <EntryQuality rows={rows} />
-      </Section>
-      <Section icon={<PieChart size={16} />} title="Exit Efficiency" note="holding time by exit reason">
-        <ExitQualityTable rows={rows} />
-      </Section>
+      {show('Performance') && (
+        <div className="research-kpis">
+          {[
+            ['Expectancy', fmt(p.expectancy), 'Average expected PnL per trade · price terms'],
+            ['Payoff ratio', p.payoff.toFixed(2), 'Average win divided by average loss · price terms'],
+            ['Max losing streak', String(r.maxLosingStreak), 'Longest run of consecutive losing trades'],
+            ['Recovery factor', r.recoveryFactor.toFixed(2), 'Net PnL divided by maximum closed-trade drawdown · price terms'],
+          ].map(([label, value, note]) => (
+            <div key={label}>
+              <span>{label}</span>
+              <strong>{value}</strong>
+              <small>{note}</small>
+            </div>
+          ))}
+        </div>
+      )}
+      {show('Performance') && (
+        <Section icon={<AreaChart size={16} />} title="Equity Analysis" note="closed-trade series · price terms">
+          <EquityAnalysis rows={rows} />
+        </Section>
+      )}
+      {show('Performance') && (
+        <Section icon={<BarChart3 size={16} />} title="Trade Distribution" note="seeded trade set">
+          <DistributionAnalysis rows={rows} />
+        </Section>
+      )}
+      {show('Trades') && (
+        <Section icon={<LineChart size={16} />} title="Direction Analysis" note="LONG vs SHORT">
+          <DirectionAnalysis rows={rows} />
+        </Section>
+      )}
+      {show('Trades') && (
+        <Section icon={<PieChart size={16} />} title="Exit Analysis" note="TP / SL / END_OF_DATA mix">
+          <ExitAnalysis rows={rows} />
+        </Section>
+      )}
+      {show('Risk & Drawdown') && (
+        <Section icon={<AreaChart size={16} />} title="Performance & Trade Quality" note="risk-adjusted returns · R multiples · excursions">
+          <PerformanceQuality rows={rows} />
+        </Section>
+      )}
+      {show('Risk & Drawdown') && (
+        <Section icon={<TrendingUp size={16} />} title="Drawdown Analysis" note="depth · duration · recovery">
+          <DrawdownQuality rows={rows} />
+        </Section>
+      )}
+      {show('Execution') && (
+        <Section icon={<LineChart size={16} />} title="Signal Analysis" note="generated vs executed">
+          <SignalQuality rows={rows} totalSignals={totalSignals} />
+        </Section>
+      )}
+      {show('Execution') && (
+        <Section icon={<BarChart3 size={16} />} title="Entry Analysis" note="entries by hour · UTC">
+          <EntryQuality rows={rows} />
+        </Section>
+      )}
+      {show('Execution') && (
+        <Section icon={<PieChart size={16} />} title="Exit Efficiency" note="holding time by exit reason">
+          <ExitQualityTable rows={rows} />
+        </Section>
+      )}
     </>
   );
 }

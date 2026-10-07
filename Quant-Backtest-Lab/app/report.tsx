@@ -26,16 +26,21 @@ export function FullReport(){
  const state=useRun();
  const [group,setGroup]=useState('Profit & Risk');
  if(state.status!=='ready')return <ReportState state={state}/>;
- const run=state.run;
- const strip=headline(run);
- const grouped=groupMetrics(reportGroups(run)[group]);
- return <div className="report-workspace">
+  const run=state.run;
+  const strip=headline(run);
+  const PRIMARY=new Set(['Total Trades','Win Rate','Total PnL','Profit Factor','Max Drawdown']);
+  const primary=strip.filter(([l])=>PRIMARY.has(l));
+  const secondary=strip.filter(([l])=>!PRIMARY.has(l));
+  const stripRow=(rows:[string,string][])=>rows.map(([l,v])=><div key={l} className={headlineIsPending(l)?'is-pending':''}><span>{l}</span><b>{v}</b></div>);
+  const grouped=groupMetrics(reportGroups(run)[group]);
+  return <div className="report-workspace">
  <section className="panel report-summary">
   <div className="panel-head">
    <h2><FileBarChart/>Backtest Summary</h2>
    <span className="report-context">{reportContext(run)}</span>
   </div>
-  <div className="report-strip">{strip.map(([l,v])=><div key={l} className={headlineIsPending(l)?'is-pending':''}><span>{l}</span><b>{v}</b></div>)}</div>
+  <div className="report-strip primary">{stripRow(primary)}</div>
+  <div className="report-strip secondary">{stripRow(secondary)}</div>
  </section>
  <section className="panel report-groups">
   <div className="panel-head report-groups-head">

@@ -17,6 +17,8 @@ export type TimelineTrade = {
   direction: 'LONG' | 'SHORT';
   /** Epoch-ms timestamps (demo adapter) — converted to UTC ISO for display. */
   signal: number;
+  /** Epoch-ms the signal became tradable (>= signal). Falls back to signal + one candle. */
+  signalAvailable?: number;
   entryTime: number;
   exitTime: number;
   entry: number;
@@ -91,8 +93,8 @@ export function tradeTimelineEvents(trade: TimelineTrade): TimelineEvent[] {
       key: 'available',
       title: 'Signal available',
       note: `Candle closed · ${trade.direction} direction confirmed, tradable from here.`,
-      timestampMs: trade.signal + 900000,
-      timestampUtc: utc(trade.signal + 900000),
+      timestampMs: trade.signalAvailable ?? trade.signal + 900000,
+      timestampUtc: utc(trade.signalAvailable ?? trade.signal + 900000),
       tone: 'signal',
     },
     {

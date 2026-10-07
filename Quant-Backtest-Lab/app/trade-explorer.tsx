@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowUpDown, Search, X } from 'lucide-react';
 import { fmt, time } from './demo';
+import { ExcursionValue } from './excursion';
 import type { EnrichedTrade } from './analytics';
 
 type DirectionFilter = 'ALL' | 'LONG' | 'SHORT';
@@ -15,6 +16,10 @@ const OVERSCAN = 6;
 const MAX_RENDERED = 80;
 
 const REASON_LABEL: Record<string, string> = { SL: 'Stop loss', TP: 'Take profit', EOD: 'End of data' };
+
+/** Truthful excursion explanations: the engine does not supply intratrade excursion data. */
+const MAE_NOTE = 'MAE (Maximum Adverse Excursion): unavailable because this run does not provide intratrade excursion data.';
+const MFE_NOTE = 'MFE (Maximum Favorable Excursion): unavailable because this run does not provide intratrade excursion data.';
 
 function pad3(n: number) {
   return String(n).padStart(3, '0');
@@ -102,11 +107,12 @@ export function TradeExplorer({
   const end = Math.min(filtered.length, start + Math.min(visible, MAX_RENDERED));
   const window = filtered.slice(start, end);
 
-  const sortButton = (key: SortKey, label: string) => (
+  const sortButton = (key: SortKey, label: string, title?: string) => (
     <button
       className={'trade-sort' + (sortKey === key ? ' active' : '')}
       onClick={() => toggleSort(key)}
       aria-label={`Sort by ${label}`}
+      title={title}
     >
       {label}
       {sortKey === key && <span className="sort-dir">{sortDir === 'asc' ? '▲' : '▼'}</span>}
@@ -167,8 +173,8 @@ export function TradeExplorer({
           {sortButton('id', 'ID')}
           {sortButton('pnl', 'PnL')}
           {sortButton('durationMin', 'Duration')}
-          {sortButton('mae', 'MAE')}
-          {sortButton('mfe', 'MFE')}
+          {sortButton('mae', 'MAE', MAE_NOTE)}
+          {sortButton('mfe', 'MFE', MFE_NOTE)}
         </div>
       </div>
 
@@ -205,7 +211,7 @@ export function TradeExplorer({
                       {t.reason}
                     </span>
                     <span className={'trade-row-pnl ' + (t.pnl > 0 ? 'good' : t.pnl < 0 ? 'bad' : '')}>{fmt(t.pnl)}</span>
-                    <span className="trade-row-meta">{time(t.entryTime)} UTC · MAE {t.mae === null ? 'N/A' : fmt(t.mae)} · MFE {t.mfe === null ? 'N/A' : fmt(t.mfe)}</span>
+                    <span className="trade-row-meta">{time(t.entryTime)} UTC · <ExcursionValue kind="MAE" value={t.mae} /> · <ExcursionValue kind="MFE" value={t.mfe} /></span>
                   </button>
                 );
               })}

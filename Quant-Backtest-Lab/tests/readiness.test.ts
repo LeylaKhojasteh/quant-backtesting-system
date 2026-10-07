@@ -18,9 +18,9 @@ describe('readiness.ts - DataReadiness derivation', () => {
     const byKey = Object.fromEntries(items.map((i) => [i.key, i]));
     assert.equal(byKey.source.status, 'Seeded demo');
     assert.equal(byKey.validation.status, 'Not measured');
-    assert.equal(byKey.engine.status, 'Not connected');
+    assert.equal(byKey.engine.status, 'Not available');
     assert.equal(byKey.account.status, 'Not available');
-    assert.equal(byKey.reliability.status, 'Visual preview only');
+    assert.equal(byKey.reliability.status, 'Not a real run');
   });
 
   test('every readiness item carries a ready-hint for tooltips', async () => {

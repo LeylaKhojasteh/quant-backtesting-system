@@ -27,7 +27,7 @@ from scripts.e2e_run_switch import (  # noqa: E402
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-APP_URL = "http://127.0.0.1:5173/"
+APP_URL = "http://127.0.0.1:5173/?fixture=demo"
 BRIDGE = "http://127.0.0.1:8765"
 PUBLIC = ROOT / "Quant-Backtest-Lab" / "public"
 MANIFEST = PUBLIC / "adapters-run-manifest.json"
@@ -42,7 +42,7 @@ WAIT_SOURCE_JS = ("(needle => new Promise(res => {"
                   " if(ok())return res(true);" + _POLL.replace("MAX", "25000") + "}))")
 WAIT_NEW_RUN_JS = ("(prev => new Promise(res => {"
                    " const ok=()=>{const t=(document.querySelector('.run-status')||{}).textContent||'';"
-                   "  const m=t.match(/Archived reference · (\\S+) ·/); return !!m && m[1]!==prev;};"
+                   "  const m=t.match(/Archived Run · (\\S+) ·/); return !!m && m[1]!==prev;};"
                    " if(ok())return res(true);" + _POLL.replace("MAX", "150000") + "}))")
 WAIT_STATUS_ID_JS = ("(rid => new Promise(res => {"
                      " const ok=()=>(((document.querySelector('.run-status')||{}).textContent)||'').includes(rid);"
@@ -201,7 +201,7 @@ def main() -> int:
         ok &= check("new run completes + auto-loads", cdp.evaluate(f"({WAIT_NEW_RUN_JS})('')", timeout=180),
                     cdp.evaluate(f"({TEXT_JS})('.rr-notice')"))
         status_text = cdp.evaluate(f"({TEXT_JS})('.run-status')") or ""
-        run_a = (re.search(r"Archived reference · (\S+) ·", status_text) or [None, None])[1]
+        run_a = (re.search(r"Archived Run · (\S+) ·", status_text) or [None, None])[1]
         ok &= check("run A created", bool(run_a), status_text[:100])
 
         # ---- library shows run A; open it in dashboard -----------------------
@@ -237,13 +237,16 @@ def main() -> int:
         strat_text = cdp.evaluate(f"({TEXT_JS})('[aria-label=\"Real run strategy\"]')") or ""
         ok &= check("reuse restored strategy", "Candle Direction" in strat_text, strat_text[:60])
         # change execution settings -> second run differs
+        cdp.evaluate(f"({CLICK_ARIA_JS})('Strategy & Trade Settings')")
+        cdp.evaluate(f"({WAIT_SEL_JS})('[aria-label=\"Stop distance\"]')")
         set_input(cdp, '[aria-label="Stop distance"]', "25")
+        escape(cdp)
         set_input(cdp, '[aria-label="Run start date"]', "2025-01-02")
         set_input(cdp, '[aria-label="Run end date"]', "2025-01-02")
         cdp.evaluate(CLICK_RUN_JS)
         ok &= check("re-run with changed execution completes", cdp.evaluate(f"({WAIT_NEW_RUN_JS})({json.dumps(run_a or '')})", timeout=180))
         status_text = cdp.evaluate(f"({TEXT_JS})('.run-status')") or ""
-        run_ctrl = (re.search(r"Archived reference · (\S+) ·", status_text) or [None, None])[1]
+        run_ctrl = (re.search(r"Archived Run · (\S+) ·", status_text) or [None, None])[1]
         payload_ctrl = json.loads((PUBLIC / f"runs-{run_ctrl}-result.json").read_text(encoding="utf-8")) if run_ctrl and (PUBLIC / f"runs-{run_ctrl}-result.json").is_file() else {}
         a_trades = (payload_a.get("metrics") or {}).get("total_trades")
         c_trades = (payload_ctrl.get("metrics") or {}).get("total_trades")
@@ -259,14 +262,17 @@ def main() -> int:
                     cdp.evaluate(f"({TEXT_JS})('[aria-label=\"Real run strategy\"]')"))
         ok &= check("imported file on disk", (strategy_dir / "ema_cross.py").is_file())
         # run EMA with non-default parameters
+        cdp.evaluate(f"({CLICK_ARIA_JS})('Strategy & Trade Settings')")
+        cdp.evaluate(f"({WAIT_SEL_JS})('[aria-label=\"Strategy parameter fast_period\"]')")
         set_input(cdp, '[aria-label="Strategy parameter fast_period"]', "2")
         set_input(cdp, '[aria-label="Strategy parameter slow_period"]', "5")
+        escape(cdp)
         set_input(cdp, '[aria-label="Run start date"]', "2025-01-02")
         set_input(cdp, '[aria-label="Run end date"]', "2025-01-02")
         cdp.evaluate(CLICK_RUN_JS)
         ok &= check("EMA run completes", cdp.evaluate(f"({WAIT_NEW_RUN_JS})({json.dumps(run_ctrl or '')})", timeout=180))
         status_text = cdp.evaluate(f"({TEXT_JS})('.run-status')") or ""
-        run_b = (re.search(r"Archived reference · (\S+) ·", status_text) or [None, None])[1]
+        run_b = (re.search(r"Archived Run · (\S+) ·", status_text) or [None, None])[1]
         payload_b = json.loads((PUBLIC / f"runs-{run_b}-result.json").read_text(encoding="utf-8")) if run_b and (PUBLIC / f"runs-{run_b}-result.json").is_file() else {}
         ok &= check("EMA run archived with imported strategy", payload_b.get("strategy", {}).get("name") == "EMA Cross")
         ok &= check("EMA archive keeps strategy snapshot",

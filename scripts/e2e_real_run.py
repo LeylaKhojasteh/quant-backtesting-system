@@ -42,7 +42,7 @@ from scripts.e2e_run_switch import (  # noqa: E402
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-APP_URL = "http://127.0.0.1:5173/"
+APP_URL = "http://127.0.0.1:5173/?fixture=demo"
 BRIDGE_PORT = 8765
 BRIDGE_URL = f"http://127.0.0.1:{BRIDGE_PORT}"
 PUBLIC = ROOT / "Quant-Backtest-Lab" / "public"
@@ -223,7 +223,7 @@ def main() -> int:
                     f"{runs_before} -> {runs_after}")
 
         status_text = cdp.evaluate(f"({TEXT_JS})('.run-status')") or ""
-        m = re.search(r"Archived reference · (\S+) ·", status_text)
+        m = re.search(r"Archived Run · (\S+) ·", status_text)
         new_run = m.group(1) if m else None
         ok &= check("UI switched to new run", bool(new_run), status_text[:140])
 
@@ -261,9 +261,11 @@ def main() -> int:
         cdp.evaluate(f"({CLICK_NAV_JS})('Backtest')")
         cdp.evaluate(f"({WAIT_SEL_JS})('.overview-trade-log')")
         cdp.evaluate(f"({CLICK_RESULT_TAB_JS})('Analytics')")
+        cdp.evaluate("(t=>{const b=[...document.querySelectorAll('.analytics-nav button')].find(x=>x.textContent.includes(t)); if(b) b.click();})('Account & Data')")
         ok &= check("Analytics run identity renders", cdp.evaluate(f"({WAIT_SEL_JS})('.run-identity')"))
         ident = cdp.evaluate(f"({TEXT_JS})('.run-identity')") or ""
         ok &= check("Analytics shows run strategy", payload.get("strategy", {}).get("name", "") in ident, ident[:120])
+        cdp.evaluate("(t=>{const b=[...document.querySelectorAll('.analytics-nav button')].find(x=>x.textContent.includes(t)); if(b) b.click();})('Risk & Drawdown')")
         pending = cdp.evaluate("Array.from(document.querySelectorAll('.analytics-view .pm[role=\"status\"]')).map(e=>e.getAttribute('aria-label'))") or []
         ok &= check("unsupported MAE/MFE metrics stay unavailable", any("Average MAE" in x for x in pending),
                     "; ".join(pending)[:140])
@@ -278,7 +280,7 @@ def main() -> int:
         ok &= check("switch back to new run", cdp.evaluate(f"({CLICK_SOURCE_JS})({json.dumps(new_run or '')})") == "CLICKED")
         ok &= check("new run data restored (no stale)",
                     cdp.evaluate(f"({WAIT_ROW_JS})(['{first_entry}','{DEMO_ENTRY}'])") )
-        ok &= check("selected trade resets to #1", "#1" in (cdp.evaluate(f"({TEXT_JS})('.selected-trade-strip')") or ""))
+        ok &= check("selected trade resets to #1", (cdp.evaluate(f"({TEXT_JS})('.overview-trade-log tr.selected td:first-child')") or "").strip() == "1")
 
         errs = [e for e in cdp.console_errors
                 if "favicon" not in e.lower()
@@ -292,7 +294,7 @@ def main() -> int:
         bridge.wait(timeout=10)
         cdp.call("Page.navigate", {"url": APP_URL})
         ok &= check("offline: app still loads Demo", cdp.evaluate(f"({WAIT_BADGE_JS})('DEMO')"))
-        ok &= check("offline: engine shows Unavailable", cdp.evaluate(f"({WAIT_TEXT_JS})(['.engine','Unavailable'])"))
+        ok &= check("offline: engine shows Unavailable", cdp.evaluate(f"({WAIT_TEXT_JS})(['.engine','Offline'])"))
         ok &= check("offline: Demo workflow works", cdp.evaluate(f"({WAIT_ROW_JS})(['{DEMO_ENTRY}',''])") )
         ok &= check("offline: real-run control disabled", cdp.evaluate(
             "(() => { const b=[...document.querySelectorAll('.real-run button')].find(x=>x.textContent.includes('Run Backtest')); return !!b && b.disabled; })()"))

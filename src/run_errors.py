@@ -166,3 +166,10 @@ class MonteCarloNotFoundError(RunError):
 class InvalidMonteCarloIdError(RunError):
     code = "invalid_monte_carlo_id"
     http_status = 400
+
+
+class UnsupportedTimeframeError(RunError):
+    """A timeframe outside the supported resampling set (never a parser error)."""
+
+    code = "unsupported_timeframe"
+    http_status = 400

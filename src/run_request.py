@@ -22,11 +22,24 @@ from src.run_errors import (
     InvalidExecutionError,
     InvalidParametersError,
     InvalidStrategyError,
+    UnsupportedTimeframeError,
 )
 
 #: CLI/engine setting names that are execution configuration, not strategy
 #: parameters. Passing them through ``--param`` is rejected.
 ENGINE_SETTING_NAMES = ("stop_distance", "take_profit_distance")
+
+#: Resampling timeframes supported by the engine (pandas offset aliases).
+#: These are the canonical request values; the UI presents friendly labels.
+SUPPORTED_TIMEFRAMES: tuple[tuple[str, str], ...] = (
+    ("1min", "1 minute (M1)"),
+    ("5min", "5 minutes (M5)"),
+    ("15min", "15 minutes (M15)"),
+    ("30min", "30 minutes (M30)"),
+    ("1h", "1 hour (H1)"),
+    ("4h", "4 hours (H4)"),
+)
+SUPPORTED_TIMEFRAME_VALUES = tuple(value for value, _ in SUPPORTED_TIMEFRAMES)
 
 
 @dataclass
@@ -295,6 +308,10 @@ def parse_request_payload(payload) -> BacktestRunRequest:
         raise InvalidDatasetError("market.data_source is required")
     if not isinstance(timeframe, str) or not timeframe.strip():
         raise InvalidDatasetError("market.timeframe must be a non-empty string")
+    if timeframe.strip() not in SUPPORTED_TIMEFRAME_VALUES:
+        raise UnsupportedTimeframeError(
+            "unsupported timeframe; supported: " + ", ".join(SUPPORTED_TIMEFRAME_VALUES)
+        )
     for key in ("start", "end"):
         value = raw_market.get(key)
         if value is not None and (not isinstance(value, str) or not value.strip()):

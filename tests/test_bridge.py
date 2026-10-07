@@ -7,6 +7,7 @@ access or git-ignored ``data/`` is required.
 
 import json
 import math
+import os
 import shutil
 import sys
 import tempfile
@@ -18,6 +19,12 @@ from pathlib import Path
 from unittest import mock
 
 import pandas as pd
+
+# Python's urllib reads the Windows registry proxy (unlike WinHTTP), which can
+# route 127.0.0.1 through a proxy and break these localhost tests. Force direct.
+os.environ.setdefault("no_proxy", "127.0.0.1,localhost")
+os.environ.setdefault("NO_PROXY", "127.0.0.1,localhost")
+urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))

@@ -61,20 +61,22 @@ export function TradeTimeline({
               >
                 <span className="tt-dot" style={{ background: tone.color }} aria-hidden />
                 <span className="tt-body">
-                  <span className="tt-title">
-                    {event.title}
-                    <span className="tt-tone-tag" style={{ color: tone.color, borderColor: tone.color }}>
-                      {tone.label}
-                    </span>
+                  <span className="tt-title">{event.title}</span>
+                  <span className="tt-tone-tag" style={{ color: tone.color, borderColor: tone.color }}>
+                    {tone.label}
                   </span>
+                  <span className="tt-sep" aria-hidden>·</span>
                   <span className="tt-time">{event.timestampUtc}</span>
-                  <span className="tt-note">{event.missing ? 'Not supplied by run' : event.note}</span>
-                  {(event.side || event.price !== undefined) && (
-                    <span className="tt-price">
-                      {event.side && <span className="tt-side">{event.side}</span>}
-                      {event.price !== undefined && <span className="tt-value">{fmt(event.price)}</span>}
-                    </span>
-                  )}
+                  <span className="tt-sep" aria-hidden>·</span>
+                  <span className="tt-note">
+                    {event.missing ? 'Not supplied by run' : event.note}
+                    {(event.side || event.price !== undefined) && (
+                      <span className="tt-price">
+                        {event.side && <span className="tt-side"> {event.side}</span>}
+                        {event.price !== undefined && <span className="tt-value"> {fmt(event.price)}</span>}
+                      </span>
+                    )}
+                  </span>
                 </span>
               </button>
               {index < events.length - 1 && <span className="tt-link" aria-hidden />}

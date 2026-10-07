@@ -132,5 +132,52 @@ class BuildRunConfigTest(unittest.TestCase):
         self.assertNotIn("publish", asdict(request)["market"])
 
 
+class TimeframeContractTest(unittest.TestCase):
+    """The timeframe at the request boundary is a controlled, canonical value."""
+
+    def _base(self, timeframe):
+        return {
+            "strategy": {"selector": "candle_direction"},
+            "market": {
+                "symbol": "XAUUSD", "data_source": "x.csv",
+                "start": "2025-01-02", "end": "2025-01-02", "timeframe": timeframe,
+            },
+        }
+
+    # UI label -> canonical backend value (no alias collision).
+    EXPECTED_MAPPING = (
+        ("1min", "1 minute (M1)"),
+        ("5min", "5 minutes (M5)"),
+        ("15min", "15 minutes (M15)"),
+        ("30min", "30 minutes (M30)"),
+        ("1h", "1 hour (H1)"),
+        ("4h", "4 hours (H4)"),
+    )
+
+    def test_ui_label_to_canonical_mapping(self):
+        from src import run_request
+        self.assertEqual(run_request.SUPPORTED_TIMEFRAMES, self.EXPECTED_MAPPING)
+        values = [v for v, _ in run_request.SUPPORTED_TIMEFRAMES]
+        self.assertEqual(len(values), len(set(values)), "canonical values must be unique")
+
+    def test_backend_accepts_all_six_canonical_values(self):
+        from src import run_request
+        for value, _ in self.EXPECTED_MAPPING:
+            with self.subTest(value=value):
+                req = run_request.parse_request_payload(self._base(value))
+                self.assertEqual(req.market.timeframe, value)
+
+    def test_backend_rejects_unsupported_and_aliases(self):
+        from src import run_request, run_errors
+        for bad in ("44", "abc", "15minutes", "foo", "H4", "4hours", "m15"):
+            with self.subTest(bad=bad):
+                with self.assertRaises(run_errors.UnsupportedTimeframeError) as ctx:
+                    run_request.parse_request_payload(self._base(bad))
+                self.assertEqual(ctx.exception.code, "unsupported_timeframe")
+                # No raw parser detail leaks.
+                self.assertNotIn("Invalid frequency", str(ctx.exception))
+                self.assertNotIn("ValueError", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

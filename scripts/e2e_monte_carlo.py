@@ -26,7 +26,7 @@ from scripts.e2e_run_switch import (  # noqa: E402
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-APP_URL = "http://127.0.0.1:5173/"
+APP_URL = "http://127.0.0.1:5173/?fixture=demo"
 BRIDGE = "http://127.0.0.1:8765"
 PUBLIC = ROOT / "Quant-Backtest-Lab" / "public"
 MANIFEST = PUBLIC / "adapters-run-manifest.json"
@@ -52,7 +52,7 @@ WAIT_ENABLED_JS = ("(() => new Promise(res => {"
                    " if(ok())return res(true);" + _POLL.replace("MAX", "30000") + "}))()")
 WAIT_NEW_RUN_JS = ("(prev => new Promise(res => {"
                    " const ok=()=>{const t=(document.querySelector('.run-status')||{}).textContent||'';"
-                   "  const m=t.match(/Archived reference · (\\S+) ·/); return !!m && m[1]!==prev;};"
+                   "  const m=t.match(/Archived Run · (\\S+) ·/); return !!m && m[1]!==prev;};"
                    " if(ok())return res(true);" + _POLL.replace("MAX", "180000") + "}))")
 WAIT_MC_JS = ("(() => new Promise(res => {"
               " const ok=()=>!!document.querySelector('.mc-study-head') && !!document.querySelector('.mc-envelope svg');"
@@ -259,6 +259,8 @@ def main() -> int:
         select_radix(cdp, "Real run strategy", "Candle Direction")
         set_input(cdp, '[aria-label="Run start date"]', "2025-01-02")
         set_input(cdp, '[aria-label="Run end date"]', "2025-01-02")
+        cdp.evaluate(f"({CLICK_ARIA_JS})('Strategy & Trade Settings')")
+        cdp.evaluate(f"({WAIT_SEL_JS})('[aria-label=\"Stop distance\"]')")
         cdp.evaluate(f"({CLICK_ARIA_JS})('Enable account model')")
         cdp.evaluate(f"({WAIT_SEL_JS})('[aria-label=\"Account currency\"]')")
         set_input(cdp, '[aria-label="Account currency"]', "USD")
@@ -267,10 +269,12 @@ def main() -> int:
         set_input(cdp, '[aria-label="Account commission per lot"]', "7")
         set_input(cdp, '[aria-label="Instrument contract size"]', "100")
         set_input(cdp, '[aria-label="Instrument quote currency"]', "USD")
-        prev = (re.search(r"Archived reference · (\S+) ·", cdp.evaluate(f"({TEXT_JS})('.run-status')") or "") or [None, None])[1]
+        escape(cdp)
+        time.sleep(0.4)
+        prev = (re.search(r"Archived Run · (\S+) ·", cdp.evaluate(f"({TEXT_JS})('.run-status')") or "") or [None, None])[1]
         cdp.evaluate(CLICK_RUN_JS)
         ok &= check("account run created + opened", cdp.evaluate(f"({WAIT_NEW_RUN_JS})({json.dumps(prev)})", timeout=200))
-        account_run = (re.search(r"Archived reference · (\S+) ·", cdp.evaluate(f"({TEXT_JS})('.run-status')") or "") or [None, None])[1]
+        account_run = (re.search(r"Archived Run · (\S+) ·", cdp.evaluate(f"({TEXT_JS})('.run-status')") or "") or [None, None])[1]
         ok &= check("account workflow shows account metrics",
                     cdp.evaluate(f"({WAIT_METRICS_JS})('Net Account PnL')"))
 
@@ -313,6 +317,7 @@ def main() -> int:
         ok &= check("source run deleted in isolated setup", status == 200, str(status))
         open_library(cdp)
         open_tab(cdp, "Monte Carlo")
+        cdp.evaluate(f"({WAIT_MC_HIST_JS})({json.dumps(ac_id)})")
         cdp.evaluate(f"({CLICK_ARIA_JS})({json.dumps(f'Open Monte Carlo {ac_id}')})")
         ok &= check("historical study marks SOURCE RUN MISSING without crashing",
                     cdp.evaluate(f"({WAIT_MISSING_JS})({json.dumps(ac_id)})", timeout=40))

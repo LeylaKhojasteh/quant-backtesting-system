@@ -57,6 +57,7 @@ export function buildDemoRun(): unknown {
     id: t.id,
     direction: t.direction,
     signalTimeUtc: toUtcIso(t.signal),
+    signalAvailableUtc: toUtcIso(t.signal + 900000),
     entryTimeUtc: toUtcIso(t.entryTime),
     exitTimeUtc: toUtcIso(t.exitTime),
     entry: t.entry,

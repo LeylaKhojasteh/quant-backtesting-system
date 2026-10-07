@@ -204,6 +204,11 @@ def execute_run(
                 f"no ticks in {data_path} for the requested range"
             )
         timeframe = request.market.timeframe
+        if timeframe not in run_request.SUPPORTED_TIMEFRAME_VALUES:
+            raise run_errors.UnsupportedTimeframeError(
+                "unsupported timeframe; supported: "
+                + ", ".join(run_request.SUPPORTED_TIMEFRAME_VALUES)
+            )
         candles = ticks.set_index("timestamp")["bid"].resample(timeframe).ohlc().dropna()
     except run_errors.RunError:
         raise

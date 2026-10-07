@@ -245,7 +245,8 @@ export function mapPythonResultToBacktestRun(payload: PythonResult): unknown {
   const trades = ordered.map((t, i) => ({
     id: i + 1,
     direction: t.direction,
-    signalTimeUtc: pythonTimeToUtcIso(t.signal_available_time),
+    signalTimeUtc: pythonTimeToUtcIso(t.signal_candle_start || t.signal_available_time),
+    signalAvailableUtc: pythonTimeToUtcIso(t.signal_available_time),
     entryTimeUtc: pythonTimeToUtcIso(t.entry_time),
     exitTimeUtc: pythonTimeToUtcIso(t.exit_time),
     entry: t.entry_price,

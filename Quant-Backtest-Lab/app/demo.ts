@@ -1,5 +1,5 @@
 // Seeded visualization data only. Replace this adapter with Python engine results.
-export type Trade={id:number;direction:'LONG'|'SHORT';signal:number;entryTime:number;exitTime:number;entry:number;exit:number;pnl:number;reason:'SL'|'TP'|'EOD';spreadIn:number;spreadOut:number;sl:number;tp:number};
+export type Trade={id:number;direction:'LONG'|'SHORT';signal:number;signalAvailable?:number;entryTime:number;exitTime:number;entry:number;exit:number;pnl:number;reason:'SL'|'TP'|'EOD';spreadIn:number;spreadOut:number;sl:number;tp:number};
 export const base=Date.UTC(2025,0,31);
 export const fmt=(n:number)=>n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 export const time=(n:number,full=false)=>new Date(n).toISOString().slice(full?0:11,23).replace('T',' ');

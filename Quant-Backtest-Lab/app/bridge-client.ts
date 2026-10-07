@@ -187,6 +187,21 @@ export async function listInstruments(fetchImpl?: typeof fetch): Promise<Instrum
   return Array.isArray(data?.instruments) ? data.instruments : [];
 }
 
+export interface TimeframeOption {
+  value: string;
+  label: string;
+}
+
+/** Canonical, engine-supported timeframes (single source of truth: backend). */
+export async function listTimeframes(fetchImpl?: typeof fetch): Promise<TimeframeOption[]> {
+  const data = await requestJson<{ timeframes?: TimeframeOption[] }>(
+    '/datasets',
+    undefined,
+    fetchImpl,
+  );
+  return Array.isArray(data?.timeframes) ? data.timeframes : [];
+}
+
 export async function submitRun(
   payload: BacktestRunRequestPayload,
   fetchImpl?: typeof fetch,

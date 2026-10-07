@@ -27,7 +27,7 @@ from scripts.e2e_run_switch import (  # noqa: E402
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-APP_URL = "http://127.0.0.1:5173/"
+APP_URL = "http://127.0.0.1:5173/?fixture=demo"
 BRIDGE = "http://127.0.0.1:8765"
 PUBLIC = ROOT / "Quant-Backtest-Lab" / "public"
 MANIFEST = PUBLIC / "adapters-run-manifest.json"
@@ -53,7 +53,7 @@ WAIT_ENABLED_JS = ("(() => new Promise(res => {"
                    " if(ok())return res(true);" + _POLL.replace("MAX", "30000") + "}))()")
 WAIT_NEW_RUN_JS = ("(prev => new Promise(res => {"
                    " const ok=()=>{const t=(document.querySelector('.run-status')||{}).textContent||'';"
-                   "  const m=t.match(/Archived reference · (\\S+) ·/); return !!m && m[1]!==prev;};"
+                   "  const m=t.match(/Archived Run · (\\S+) ·/); return !!m && m[1]!==prev;};"
                    " if(ok())return res(true);" + _POLL.replace("MAX", "180000") + "}))")
 WAIT_METRICS_JS = ("(text => new Promise(res => {"
                    " const ok=()=>{const e=document.querySelector('.metrics-grouped'); return !!e && e.textContent.includes(text);};"
@@ -187,6 +187,8 @@ def main() -> int:
         select_radix(cdp, "Real run strategy", "Candle Direction")
         set_input(cdp, '[aria-label="Run start date"]', "2025-01-02")
         set_input(cdp, '[aria-label="Run end date"]', "2025-01-02")
+        cdp.evaluate(f"({CLICK_ARIA_JS})('Strategy & Trade Settings')")
+        ok &= check("execution & account dialog opens", cdp.evaluate(f"({WAIT_SEL_JS})('[aria-label=\"Stop distance\"]')"))
         cdp.evaluate(f"({CLICK_ARIA_JS})('Enable account model')")
         ok &= check("account model form opens", cdp.evaluate(f"({WAIT_SEL_JS})('[aria-label=\"Account currency\"]')"))
         set_input(cdp, '[aria-label="Account currency"]', "USD")
@@ -195,11 +197,13 @@ def main() -> int:
         set_input(cdp, '[aria-label="Account commission per lot"]', "7")
         set_input(cdp, '[aria-label="Instrument contract size"]', "100")
         set_input(cdp, '[aria-label="Instrument quote currency"]', "USD")
+        escape(cdp)
+        time.sleep(0.4)
 
-        prev = (re.search(r"Archived reference · (\S+) ·", cdp.evaluate(f"({TEXT_JS})('.run-status')") or "") or [None, None])[1]
+        prev = (re.search(r"Archived Run · (\S+) ·", cdp.evaluate(f"({TEXT_JS})('.run-status')") or "") or [None, None])[1]
         cdp.evaluate(CLICK_RUN_JS)
         ok &= check("account run publishes and opens", cdp.evaluate(f"({WAIT_NEW_RUN_JS})({json.dumps(prev)})", timeout=200))
-        run_id = (re.search(r"Archived reference · (\S+) ·", cdp.evaluate(f"({TEXT_JS})('.run-status')") or "") or [None, None])[1]
+        run_id = (re.search(r"Archived Run · (\S+) ·", cdp.evaluate(f"({TEXT_JS})('.run-status')") or "") or [None, None])[1]
         result = json.loads((PUBLIC / f"runs-{run_id}-result.json").read_text(encoding="utf-8"))
         acct = result.get("account") or {}
         metrics = acct.get("metrics") or {}
@@ -238,8 +242,17 @@ def main() -> int:
                     and cdp.evaluate(f"({WAIT_METRICS_JS})('Commission')"))
 
         # realized balance chart renders (isolated Equity panel, Balance mode)
+        grid_before = cdp.evaluate("(() => { const g=document.querySelector('.charts-grid'); const e=document.querySelector('.equity'); return [Math.round(g.getBoundingClientRect().height), Math.round(e.getBoundingClientRect().height)]; })()")
+        cdp.evaluate(f"({CLICK_ARIA_JS})('Performance series')")
+        time.sleep(0.3)
+        ok &= check("Balance enabled for account run",
+                    cdp.evaluate("(()=>{const o=[...document.querySelectorAll('[role=option]')].find(x=>x.textContent.includes('Balance')); return !!(o && o.getAttribute('aria-disabled')!=='true');})()"))
+        escape(cdp)
+        time.sleep(0.3)
         select_radix(cdp, "Performance series", "Balance")
-        ok &= check("realized balance curve renders", cdp.evaluate(f"({WAIT_EQUITY_JS})('Balance · account currency')"))
+        ok &= check("realized balance curve renders", cdp.evaluate(f"({WAIT_EQUITY_JS})('Realized Account Balance')"))
+        grid_after = cdp.evaluate("(() => { const g=document.querySelector('.charts-grid'); const e=document.querySelector('.equity'); return [Math.round(g.getBoundingClientRect().height), Math.round(e.getBoundingClientRect().height)]; })()")
+        ok &= check("Balance switch keeps layout stable", grid_before == grid_after, f"{grid_before} -> {grid_after}")
 
         # 15. unsupported metrics stay unavailable
         ok &= check("Sharpe stays unavailable",

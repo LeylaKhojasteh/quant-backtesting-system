@@ -93,9 +93,11 @@ test('DEMO badge exists in page.tsx', () => {
     assert.ok(!found, 'Found forbidden terminology in source');
   });
 
-  test('Cumulative PnL caption mentions "price terms — not account currency"', () => {
+  test('Chart captions use clear labels with a price-terms marker', () => {
     const charts = allFiles.get(path.join(appDir, 'charts.tsx')) || '';
-    assert.ok(charts.includes('price terms — not account currency'));
+    assert.ok(charts.includes('Cumulative Trade PnL'));
+    assert.ok(charts.includes('Closed-Trade Drawdown'));
+    assert.ok(charts.includes('Price terms'));
   });
 
   test('CSV export includes dataMode=seeded-demo and demo in filename', () => {
@@ -121,10 +123,13 @@ test('DEMO badge exists in page.tsx', () => {
     assert.ok(layout.includes('{children}') || layout.includes('children}'));
   });
 
-  test('Equity chart Balance mode has empty state for demo', () => {
+  test('Equity chart Balance mode is disabled/compact when account data is unavailable', () => {
     const charts = allFiles.get(path.join(appDir, 'charts.tsx')) || '';
-    assert.ok(charts.includes('Balance — Not available') || charts.includes('Balance — Not available'));
-    assert.ok(charts.includes('accountUnavailableReasons'));
+    assert.ok(charts.includes("mode === 'Balance' && !accountReady"));
+    assert.ok(charts.includes('equity-unavailable'));
+    assert.ok(!charts.includes('Balance — Not available'), 'the oversized empty state must be removed');
+    const page = allFiles.get(path.join(appDir, 'page.tsx')) || '';
+    assert.ok(page.includes("disabledOptions={runData?.account.accountReady?undefined:['Balance']}"), 'Balance must be disabled when unavailable');
   });
 
   test('DataQualityPanel uses "Demo / not measured" and "Seeded example"', () => {
@@ -163,10 +168,23 @@ test('DEMO badge exists in page.tsx', () => {
     assert.ok(!logic.includes("'Verified'") && !logic.includes('"Verified"'));
     assert.ok(logic.includes('Seeded demo'));
     assert.ok(logic.includes('Not measured'));
-    assert.ok(logic.includes('Not connected'));
-    assert.ok(logic.includes('Visual preview only'));
+    assert.ok(logic.includes('Not available'));
+    assert.ok(logic.includes('Not a real run'));
     const page = allFiles.get(path.join(appDir, 'page.tsx')) || '';
     assert.ok(page.includes('<DataReadinessBar'));
+  });
+
+  test('Demo replay is fixture-gated, not a product UI mode', () => {
+    const page = allFiles.get(path.join(appDir, 'page.tsx')) || '';
+    assert.ok(!page.includes('Run Demo Replay'), 'Run Demo Replay must be removed from the product UI');
+    assert.ok(!page.includes('Demo Replay'), 'Demo Replay section must be removed from the product UI');
+    assert.ok(page.includes('fixtureMode&&'), 'the Demo source must be fixture-gated');
+    assert.ok(page.includes('empty-state'), 'a real-use empty state must exist');
+    // the seeded fixture is retained for tests, but only via runner.ts
+    const runner = allFiles.get(path.join(appDir, 'runner.ts')) || '';
+    assert.ok(runner.includes('buildDemoRun'));
+    const ctx = allFiles.get(path.join(appDir, 'run-context.tsx')) || '';
+    assert.ok(ctx.includes("get('fixture')"), 'fixture must be mounted only through the explicit test hook');
   });
 
   test('Pending metrics use the shared PendingMetric component, never fake numbers', () => {

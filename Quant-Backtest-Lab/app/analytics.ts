@@ -70,6 +70,9 @@ export function enrichRunTrades(run: BacktestRun): EnrichedTrade[] {
       id: t.id,
       direction: t.direction,
       signal: Date.parse(t.signalTimeUtc),
+      signalAvailable: t.signalAvailableUtc
+        ? Date.parse(t.signalAvailableUtc)
+        : Date.parse(t.signalTimeUtc) + 900000,
       entryTime: Date.parse(t.entryTimeUtc),
       exitTime: Date.parse(t.exitTimeUtc),
       entry: t.entry,

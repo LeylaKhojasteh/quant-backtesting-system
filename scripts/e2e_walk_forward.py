@@ -30,7 +30,7 @@ from scripts.e2e_run_switch import (  # noqa: E402
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-APP_URL = "http://127.0.0.1:5173/"
+APP_URL = "http://127.0.0.1:5173/?fixture=demo"
 BRIDGE = "http://127.0.0.1:8765"
 PUBLIC = ROOT / "Quant-Backtest-Lab" / "public"
 MANIFEST = PUBLIC / "adapters-run-manifest.json"
@@ -59,7 +59,7 @@ WAIT_ROW_JS = ("(text => new Promise(res => {"
                " if(ok())return res(true);" + _POLL.replace("MAX", "25000") + "}))")
 WAIT_NEW_RUN_JS = ("(prev => new Promise(res => {"
                    " const ok=()=>{const t=(document.querySelector('.run-status')||{}).textContent||'';"
-                   "  const m=t.match(/Archived reference · (\\S+) ·/); return !!m && m[1]!==prev;};"
+                   "  const m=t.match(/Archived Run · (\\S+) ·/); return !!m && m[1]!==prev;};"
                    " if(ok())return res(true);" + _POLL.replace("MAX", "150000") + "}))")
 WAIT_CMP_ROWS_JS = ("(n => new Promise(res => {"
                     " const ok=()=>document.querySelectorAll('.cmp-table tbody tr').length>=n;"

@@ -54,8 +54,8 @@ export function useBridge(): BridgeValue {
   return useContext(BridgeContext);
 }
 
-/** Compact topbar indicator: Python engine Connected / Unavailable. */
-export function EngineStatus({ context }: { context: string }) {
+/** Compact topbar indicator: Python Bridge Connected / Offline. */
+export function EngineStatus() {
   const { state, refresh } = useBridge();
   const connected = state.status === 'connected';
   const label =
@@ -63,16 +63,16 @@ export function EngineStatus({ context }: { context: string }) {
       ? 'Checking…'
       : connected
         ? `Connected${state.health.version ? ` · v${state.health.version}` : ''}`
-        : 'Unavailable';
+        : 'Offline';
   return (
     <div
       className={'engine ' + (connected ? 'engine-live' : 'engine-muted')}
       role="status"
-      aria-label={`Python engine: ${label}`}
+      aria-label={`Python Bridge: ${label}`}
     >
       {connected ? <Check size={14} /> : <Info size={14} />}
-      <span>Python engine: {label}</span>
-      <span className="engine-context meta">· {context}</span>
+      <span>Python Bridge: {label}</span>
+      
       {!connected && state.status === 'unavailable' && (
         <button className="engine-retry" onClick={refresh} aria-label="Retry bridge connection">
           <RefreshCw size={12} /> Retry

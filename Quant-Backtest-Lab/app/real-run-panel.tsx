@@ -1,6 +1,7 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Activity, AlertTriangle, Loader2, Play, RefreshCw, Upload } from 'lucide-react';
+import { Activity, AlertTriangle, Loader2, Play, RefreshCw, Upload, Settings2, Wallet } from 'lucide-react';
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { useBridge } from './bridge-status';
 import { useRunSource } from './run-context';
@@ -11,11 +12,13 @@ import {
   listDatasets,
   listInstruments,
   listStrategies,
+  listTimeframes,
   submitRun,
   type DatasetInfo,
   type InstrumentInfo,
   type RunDetail,
   type StrategyInfo,
+  type TimeframeOption,
 } from './bridge-client';
 
 type ParamValue = string | boolean;
@@ -55,6 +58,7 @@ export function RealRunPanel() {
   const [datasetId, setDatasetId] = useState('');
   const [symbol, setSymbol] = useState('XAUUSD');
   const [timeframe, setTimeframe] = useState('15min');
+  const [timeframes, setTimeframes] = useState<TimeframeOption[]>([]);
   const [start, setStart] = useState('');
   const [end, setEnd] = useState('');
   const [stop, setStop] = useState('5');
@@ -70,8 +74,10 @@ export function RealRunPanel() {
   const [commission, setCommission] = useState('0');
   const [contractSize, setContractSize] = useState('100');
   const [quoteCurrency, setQuoteCurrency] = useState('USD');
+  const [tickSize, setTickSize] = useState('0.01');
 
   const [running, setRunning] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
   const [reuseWarning, setReuseWarning] = useState<string | null>(null);
@@ -107,12 +113,19 @@ export function RealRunPanel() {
   const loadCatalogs = useCallback(async () => {
     try {
       // First statement is async, so no synchronous setState during an effect.
-      const [list, data, instr] = await Promise.all([
+      const [list, data, instr, tfs] = await Promise.all([
         listStrategies(), listDatasets(), listInstruments().catch(() => [] as InstrumentInfo[]),
+        listTimeframes().catch(() => [] as TimeframeOption[]),
       ]);
       setStrategies(list);
       setDatasets(data);
       setInstruments(instr);
+      setTimeframes(tfs);
+      setTimeframe((cur) =>
+        tfs.some((t) => t.value === cur)
+          ? cur
+          : (tfs.find((t) => t.value === '15min')?.value ?? tfs[0]?.value ?? cur),
+      );
       setCatalogError(null);
       applyStrategySelection(list, strategyIdRef.current || undefined);
       const nextDataset = data.find((d) => d.start && d.end) ?? data[0];
@@ -189,6 +202,7 @@ export function RealRunPanel() {
       if (detail.instrument) {
         if (detail.instrument.quote_currency) setQuoteCurrency(detail.instrument.quote_currency);
         if (detail.instrument.contract_size != null) setContractSize(String(detail.instrument.contract_size));
+        if (detail.instrument.tick_size != null) setTickSize(String(detail.instrument.tick_size));
       }
       setReuseWarning(warnings.length ? `Loaded with warnings: ${warnings.join('; ')}` : null);
     },
@@ -213,6 +227,7 @@ export function RealRunPanel() {
     if (spec) {
       setQuoteCurrency(spec.quote_currency);
       setContractSize(String(spec.contract_size));
+      if (spec.tick_size != null) setTickSize(String(spec.tick_size));
     }
   }, [instruments]);
 
@@ -272,9 +287,15 @@ export function RealRunPanel() {
     }
   };
 
+  const instrumentSpec = instruments.find((i) => i.symbol.toUpperCase() === symbol.trim().toUpperCase()) ?? null;
+
   const validate = (): string | null => {
     if (!strategy) return 'Select a strategy';
     if (!dataset) return 'Select a dataset';
+    if (!symbol.trim()) return 'Select a dataset with a known symbol';
+    if (timeframes.length > 0 && !timeframes.some((t) => t.value === timeframe)) {
+      return 'Unsupported timeframe. Select one of the available timeframes.';
+    }
     const stopN = Number(stop);
     const takeN = Number(take);
     if (!Number.isFinite(stopN) || stopN <= 0) return 'Stop distance must be a positive number';
@@ -283,15 +304,15 @@ export function RealRunPanel() {
     if (start > end) return 'Start date must be on or before the end date';
     if (accountEnabled) {
       if (!accountCurrency.trim()) return 'Account currency is required';
-      if (!quoteCurrency.trim()) return 'Instrument quote currency is required';
+      if (!instrumentSpec) {
+        return `No instrument economics configured for ${symbol || 'this symbol'} — choose a supported instrument.`;
+      }
       const sb = Number(startingBalance);
       const lots = Number(positionLots);
       const comm = Number(commission);
-      const cs = Number(contractSize);
       if (!Number.isFinite(sb) || sb <= 0) return 'Starting balance must be a positive number';
       if (!Number.isFinite(lots) || lots <= 0) return 'Position size must be a positive number';
       if (!Number.isFinite(comm) || comm < 0) return 'Commission must be zero or positive';
-      if (!Number.isFinite(cs) || cs <= 0) return 'Contract size must be a positive number';
     }
     for (const [key, desc] of Object.entries(strategy.parameters)) {
       const value = params[key];
@@ -308,7 +329,8 @@ export function RealRunPanel() {
     return null;
   };
 
-  const ready = connected && !loadingCatalogs && !running && !!strategy && !!dataset;
+  const ready = connected && !loadingCatalogs && !running && !!strategy && !!dataset && !!symbol.trim()
+    && timeframes.length > 0 && timeframes.some((t) => t.value === timeframe);
 
   const submit = async () => {
     if (inFlight.current || running || !strategy || !dataset) return;
@@ -353,11 +375,14 @@ export function RealRunPanel() {
                 position_size_lots: Number(positionLots),
                 commission_per_lot_round_turn: Number(commission),
               },
-              instrument: {
-                symbol,
-                quote_currency: quoteCurrency.trim(),
-                contract_size: Number(contractSize),
-              },
+              instrument: instrumentSpec
+                ? {
+                    symbol,
+                    quote_currency: instrumentSpec.quote_currency,
+                    contract_size: instrumentSpec.contract_size,
+                    ...(instrumentSpec.tick_size != null ? { tick_size: instrumentSpec.tick_size } : {}),
+                  }
+                : undefined,
             }
           : {}),
         publish: true,
@@ -379,10 +404,6 @@ export function RealRunPanel() {
 
   return (
     <div className="config-section real-run">
-      <div className="config-heading">
-        <Activity size={16} />Real Backtest<span>03</span>
-      </div>
-
       {!connected && (
         <p className="rr-status rr-offline" role="status">
           {bridge.status === 'checking'
@@ -451,36 +472,17 @@ export function RealRunPanel() {
           )}
         </div>
 
-        {strategy && Object.keys(strategy.parameters).length > 0 && (
-          <div className="rr-params">
-            <div className="rr-group-label">Strategy Parameters</div>
-            {Object.entries(strategy.parameters).map(([key, desc]) =>
-              desc.type === 'bool' ? (
-                <label key={key} className="rr-check">
-                  <input
-                    type="checkbox"
-                    aria-label={`Strategy parameter ${key}`}
-                    checked={Boolean(params[key])}
-                    onChange={(e) => setParams((p) => ({ ...p, [key]: e.target.checked }))}
-                  />
-                  <span>{paramLabel(key)}</span>
-                </label>
-              ) : (
-                <label key={key}>
-                  {paramLabel(key)}
-                  <span className="meta"> · {desc.type}</span>
-                  <input
-                    type={desc.type === 'string' ? 'text' : 'number'}
-                    step={desc.type === 'int' ? 1 : 'any'}
-                    aria-label={`Strategy parameter ${key}`}
-                    value={String(params[key] ?? '')}
-                    onChange={(e) => setParams((p) => ({ ...p, [key]: e.target.value }))}
-                  />
-                </label>
-              ),
-            )}
-          </div>
-        )}
+        <button
+          type="button"
+          className="rr-settings-btn"
+          onClick={() => setSettingsOpen(true)}
+          aria-label="Strategy & Trade Settings"
+        >
+          <Settings2 size={13} /> Strategy &amp; Trade Settings
+          <span className="meta">
+            {Object.keys(strategy?.parameters ?? {}).length} params · {stop}/{take} · {accountEnabled ? `${accountCurrency} account` : 'price terms'}
+          </span>
+        </button>
 
         <div className="rr-group-label">Market / Data</div>
         <label>
@@ -499,16 +501,17 @@ export function RealRunPanel() {
           </Select>
         </label>
         <label>
-          Symbol
-          <input
-            value={symbol}
-            onChange={(e) => { setSymbol(e.target.value); if (accountEnabled) applyInstrumentFor(e.target.value); }}
-            aria-label="Run symbol"
-          />
+          Symbol <span className="meta">· from dataset</span>
+          <span className="rr-derived" aria-label="Run symbol">{symbol || '—'}</span>
         </label>
         <label>
           Timeframe
-          <input value={timeframe} onChange={(e) => setTimeframe(e.target.value)} aria-label="Run timeframe" />
+          <Select value={timeframe} onValueChange={setTimeframe}>
+            <SelectTrigger aria-label="Run timeframe"><SelectValue placeholder="Select timeframe" /></SelectTrigger>
+            <SelectContent>
+              {timeframes.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
         </label>
         <label>
           Date Range <span className="meta">UTC</span>
@@ -516,61 +519,6 @@ export function RealRunPanel() {
           <span className="date-to">to</span>
           <input type="date" value={end} onChange={(e) => setEnd(e.target.value)} aria-label="Run end date" />
         </label>
-
-        <div className="rr-group-label">Execution</div>
-        <label>
-          Stop Distance
-          <input type="number" step="any" value={stop} onChange={(e) => setStop(e.target.value)} aria-label="Stop distance" />
-        </label>
-        <label>
-          Take Profit Distance
-          <input type="number" step="any" value={take} onChange={(e) => setTake(e.target.value)} aria-label="Take profit distance" />
-        </label>
-
-        <div className="rr-group-label">Account Model <span className="meta">· optional</span></div>
-        <label className="rr-check">
-          <input
-            type="checkbox"
-            aria-label="Enable account model"
-            checked={accountEnabled}
-            onChange={(e) => toggleAccount(e.target.checked)}
-          />
-          <span>Enable Account Model</span>
-        </label>
-        {accountEnabled && (
-          <div className="rr-account">
-            <label>
-              Account Currency
-              <input value={accountCurrency} onChange={(e) => setAccountCurrency(e.target.value)} aria-label="Account currency" />
-            </label>
-            <label>
-              Starting Balance
-              <input type="number" step="any" value={startingBalance} onChange={(e) => setStartingBalance(e.target.value)} aria-label="Account starting balance" />
-            </label>
-            <label>
-              Position Size <span className="meta">· lots</span>
-              <input type="number" step="any" value={positionLots} onChange={(e) => setPositionLots(e.target.value)} aria-label="Account position size lots" />
-            </label>
-            <label>
-              Commission <span className="meta">· / lot / round turn</span>
-              <input type="number" step="any" value={commission} onChange={(e) => setCommission(e.target.value)} aria-label="Account commission per lot" />
-            </label>
-            <label>
-              Instrument Contract Size
-              <input type="number" step="any" value={contractSize} onChange={(e) => setContractSize(e.target.value)} aria-label="Instrument contract size" />
-            </label>
-            <label>
-              Instrument Quote Currency
-              <input value={quoteCurrency} onChange={(e) => setQuoteCurrency(e.target.value)} aria-label="Instrument quote currency" />
-            </label>
-            {accountCurrency.trim().toUpperCase() !== quoteCurrency.trim().toUpperCase() && (
-              <p className="rr-warn" role="status">
-                <AlertTriangle size={12} /> Account currency and quote currency differ — account metrics stay
-                unavailable (no FX conversion in v1).
-              </p>
-            )}
-          </div>
-        )}
       </fieldset>
 
       {reuseWarning && (
@@ -590,6 +538,99 @@ export function RealRunPanel() {
         {running ? 'Running backtest…' : 'Run Backtest'}
       </button>
       <p className="config-note">Archives + report + publishes to the dashboard</p>
+
+            <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+        <DialogContent className="settings-dialog">
+          <DialogTitle><Settings2 size={16} /> Strategy &amp; Trade Settings</DialogTitle>
+          <DialogDescription>
+            Strategy inputs, trade execution and the optional account model for this backtest.
+          </DialogDescription>
+
+          <div className="rr-group-label">Strategy inputs</div>
+          {strategy && Object.keys(strategy.parameters).length > 0 ? (
+            <div className="rr-params settings-params">
+              {Object.entries(strategy.parameters).map(([key, desc]) =>
+                desc.type === 'bool' ? (
+                  <label key={key} className="rr-check">
+                    <input
+                      type="checkbox"
+                      aria-label={`Strategy parameter ${key}`}
+                      checked={Boolean(params[key])}
+                      onChange={(e) => setParams((p) => ({ ...p, [key]: e.target.checked }))}
+                    />
+                    <span>{paramLabel(key)}</span>
+                  </label>
+                ) : (
+                  <label key={key}>
+                    {paramLabel(key)}
+                    <span className="meta"> · {desc.type}</span>
+                    <input
+                      type={desc.type === 'string' ? 'text' : 'number'}
+                      step={desc.type === 'int' ? 1 : 'any'}
+                      aria-label={`Strategy parameter ${key}`}
+                      value={String(params[key] ?? '')}
+                      onChange={(e) => setParams((p) => ({ ...p, [key]: e.target.value }))}
+                    />
+                  </label>
+                ),
+              )}
+            </div>
+          ) : (
+            <p className="meta">This strategy declares no parameters.</p>
+          )}
+
+          <div className="rr-group-label">Trade / Execution</div>
+          <p className="rr-help">Stop / take levels are engine execution inputs, not strategy parameters.</p>
+          <label>
+            Stop Distance
+            <input type="number" step="any" value={stop} onChange={(e) => setStop(e.target.value)} aria-label="Stop distance" />
+          </label>
+          <label>
+            Take Profit Distance
+            <input type="number" step="any" value={take} onChange={(e) => setTake(e.target.value)} aria-label="Take profit distance" />
+          </label>
+
+          <div className="rr-group-label">Position sizing &amp; account <span className="meta">· optional</span></div>
+          <label className="rr-check">
+            <input
+              type="checkbox"
+              aria-label="Enable account model"
+              checked={accountEnabled}
+              onChange={(e) => toggleAccount(e.target.checked)}
+            />
+            <span>Enable Account Model</span>
+          </label>
+          <p className="rr-help">
+            Optional — converts price-based PnL into account currency, realized balance, return, and
+            commission-aware metrics. Position size is a run-level lot size applied to every trade.
+          </p>
+          {accountEnabled && (
+            <div className="rr-account">
+              <label>
+                Starting Balance
+                <input type="number" step="any" value={startingBalance} onChange={(e) => setStartingBalance(e.target.value)} aria-label="Account starting balance" />
+              </label>
+              <label>
+                Account Currency
+                <input value={accountCurrency} onChange={(e) => setAccountCurrency(e.target.value)} aria-label="Account currency" />
+              </label>
+              <label>
+                Position Size <span className="meta">· lots · run-level</span>
+                <input type="number" step="any" value={positionLots} onChange={(e) => setPositionLots(e.target.value)} aria-label="Account position size lots" />
+              </label>
+              <label>
+                Commission <span className="meta">· / lot / round turn</span>
+                <input type="number" step="any" value={commission} onChange={(e) => setCommission(e.target.value)} aria-label="Account commission per lot" />
+              </label>
+                            {instrumentSpec && accountCurrency.trim().toUpperCase() !== instrumentSpec.quote_currency.trim().toUpperCase() && (
+                <p className="rr-warn" role="status">
+                  <AlertTriangle size={12} /> Account currency and quote currency differ — account metrics stay unavailable (no FX conversion in v1).
+                </p>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

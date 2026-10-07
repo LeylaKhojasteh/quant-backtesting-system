@@ -51,10 +51,10 @@ export function readinessItems(run: BacktestRun | null | undefined): ReadinessIt
     ? {
         key: 'source',
         label: 'Data source',
-        status: 'Live',
+        status: 'Archived dataset',
         tone: 'ready',
         detail: run.dataSource.name,
-        readyHint: 'Live data adapter connected.',
+        readyHint: 'Dataset resolved from an archived real run.',
       }
     : {
         key: 'source',
@@ -95,19 +95,19 @@ export function readinessItems(run: BacktestRun | null | undefined): ReadinessIt
   const engine: ReadinessItem = isLive
     ? {
         key: 'engine',
-        label: 'Engine connection',
-        status: 'Connected',
+        label: 'Run result',
+        status: 'Validated',
         tone: 'ready',
-        detail: 'Python backtest engine supplied this run.',
-        readyHint: 'Engine adapter is wired.',
+        detail: 'Produced by the verified Python tick engine (archived result).',
+        readyHint: 'Archived result validated against the engine contract.',
       }
     : {
         key: 'engine',
-        label: 'Engine connection',
-        status: 'Not connected',
+        label: 'Run result',
+        status: 'Not available',
         tone: 'unavailable',
-        detail: 'Python engine not wired; seeded reference replay.',
-        readyHint: 'Wire the Python backtest engine adapter to execute real backtests.',
+        detail: 'No archived engine result.',
+        readyHint: 'Run a real backtest to produce a validated result.',
       };
 
   const account: ReadinessItem = accountReady
@@ -150,10 +150,10 @@ export function readinessItems(run: BacktestRun | null | undefined): ReadinessIt
       : {
           key: 'reliability',
           label: 'Result reliability',
-          status: 'Visual preview only',
+          status: 'Not a real run',
           tone: 'pending',
-          detail: 'Seeded demo replay — not a live or backtested-with-data result.',
-          readyHint: 'Requires live data, measured validation and a configured account model.',
+          detail: 'Seeded demo fixture — not a live or backtested-with-data result.',
+          readyHint: 'Requires a real archived run with a configured account model.',
         };
 
   return [source, validation, engine, account, reliability];

@@ -1,13 +1,14 @@
 'use client';
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { BacktestRunSchema, type BacktestRun } from './schema';
 import { loadBacktestRun } from './runner';
 import { listArchivedRuns, loadArchivedRun, type ArchivedRunRef } from '../adapters/python-result-adapter';
 
-export type RunSource = { mode: 'demo' } | { mode: 'archived'; runId: string };
+export type RunSource = { mode: 'none' } | { mode: 'demo' } | { mode: 'archived'; runId: string };
 
 export type RunState =
   | { status: 'loading' }
+  | { status: 'empty' }
   | { status: 'ready'; run: BacktestRun; source: RunSource }
   | { status: 'error'; error: string }
   | { status: 'malformed'; message: string };
@@ -18,25 +19,32 @@ const SourceContext = createContext<{
   setSource: (s: RunSource) => void;
   archived: ArchivedRunRef[];
   refreshArchived: () => Promise<ArchivedRunRef[]>;
-}>({ source: { mode: 'demo' }, setSource: () => {}, archived: [], refreshArchived: async () => [] });
+  /** True only when the app was opened with the explicit `?fixture=demo` test hook. */
+  fixture: boolean;
+}>({
+  source: { mode: 'none' },
+  setSource: () => {},
+  archived: [],
+  refreshArchived: async () => [],
+  fixture: false,
+});
 
 /**
- * Loads the single BacktestRun for the whole application. The UI reads only
- * this value; scattered constants and raw `trades`/`cumulative` are not used
- * for reporting.
+ * Loads the single BacktestRun for the whole application.
  *
- * Two sources, one contract:
- * - demo: the existing seeded reference (default, unchanged behavior).
- * - archived: a Python `result.json` mapped through the adapter boundary.
+ * Product default is a REAL run: on open it selects the first archived run, or
+ * shows a neutral empty state prompting a real backtest. The seeded fixture is
+ * NOT a product mode; it is only mounted when the app is opened with the
+ * explicit test hook `?fixture=demo` (used by deterministic tests).
  *
- * - Loading: shows a compact pending state.
- * - Error / malformed: shows exactly why, and no invented numbers.
- * - Ready: carries the validated run plus which source supplied it.
+ * `archived` runs are mapped through the adapter boundary; the fixture is the
+ * existing seeded reference kept for tests.
  */
 export function RunProvider({ children }: { children: ReactNode }) {
-  const [source, setSource] = useState<RunSource>({ mode: 'demo' });
+  const [source, setSource] = useState<RunSource>({ mode: 'none' });
   const [state, setState] = useState<RunState>({ status: 'loading' });
   const [archived, setArchived] = useState<ArchivedRunRef[]>([]);
+  const [fixture, setFixture] = useState(false);
 
   // Re-read the served manifest (no-store) so a just-published run appears
   // immediately, without a manual page refresh.
@@ -53,11 +61,27 @@ export function RunProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // Boot: choose the first real run (archived) or the explicit test fixture.
+  const booted = useRef(false);
   useEffect(() => {
+    if (booted.current) return;
+    booted.current = true;
     let alive = true;
     (async () => {
+      const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+      const useFixture = params?.get('fixture') === 'demo';
       const runs = await refreshArchived();
-      if (alive) setArchived(runs);
+      if (!alive) return;
+      if (useFixture) {
+        setFixture(true);
+        setSource({ mode: 'demo' });
+        return;
+      }
+      if (runs.length) {
+        setSource({ mode: 'archived', runId: runs[0].runId });
+        return;
+      }
+      setState({ status: 'empty' });
     })();
     return () => {
       alive = false;
@@ -65,6 +89,7 @@ export function RunProvider({ children }: { children: ReactNode }) {
   }, [refreshArchived]);
 
   useEffect(() => {
+    if (source.mode === 'none') return;
     let alive = true;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- source switch must reset to loading before the async load resolves.
     setState({ status: 'loading' });
@@ -101,8 +126,8 @@ export function RunProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo(() => state, [state]);
   const sourceValue = useMemo(
-    () => ({ source, setSource, archived, refreshArchived }),
-    [source, archived, refreshArchived],
+    () => ({ source, setSource, archived, refreshArchived, fixture }),
+    [source, archived, refreshArchived, fixture],
   );
   return (
     <RunContext.Provider value={value}>

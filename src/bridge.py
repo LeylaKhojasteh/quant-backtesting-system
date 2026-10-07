@@ -245,7 +245,13 @@ class BridgeHandler(BaseHTTPRequestHandler):
             elif route == "/strategies":
                 self._send_json(200, {"strategies": list_strategies(self._config["strategy_dir"])})
             elif route == "/datasets":
-                self._send_json(200, {"datasets": list_datasets(self._config["data_dir"])})
+                self._send_json(200, {
+                    "datasets": list_datasets(self._config["data_dir"]),
+                    "timeframes": [
+                        {"value": value, "label": label}
+                        for value, label in run_request.SUPPORTED_TIMEFRAMES
+                    ],
+                })
             elif route == "/instruments":
                 self._send_json(200, {"instruments": accounting.instrument_catalog()})
             elif route == "/runs":

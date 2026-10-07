@@ -524,7 +524,7 @@ export function CandleChart({
             <span><i style={{ background: blue }} />E = entry · SL / TP / EOD = exit</span>
           </>
         )}
-        <span className="chart-hint">Scroll to zoom · drag to pan</span>
+        <span className="chart-hint" aria-hidden />
       </div>
     </div>
   );
@@ -742,21 +742,12 @@ export function Equity({ mode }: { mode: string }) {
     );
   }
 
-  // Balance mode without account data
+  // Balance mode without account data — the selector disables it; keep a
+  // compact fallback inside the same fixed geometry (never a giant state).
   if (mode === 'Balance' && !accountReady) {
     return (
       <div className="equity">
-        <svg ref={ref} role="img" aria-label="Balance chart unavailable"></svg>
-        <div className="equity-empty">
-          <h3>Balance — Not available</h3>
-          <PendingMetric
-            label="Balance"
-            reason={run.metrics.accountUnavailableReasons ?? ['No account model configured.']}
-            required={['Account currency', 'Initial balance', 'Account-currency PnL']}
-            status="Not available"
-            note="A balance chart requires a valid account model. The seeded demo produces PnL in price terms only; price PnL is never added to an assumed base balance."
-          />
-        </div>
+        <p className="equity-unavailable">Balance requires an enabled Account Model for this run.</p>
       </div>
     );
   }
@@ -856,19 +847,28 @@ export function Equity({ mode }: { mode: string }) {
       </svg>
       <div className="chart-foot equity-legend">
         {underwater ? (
-          <span><i style={{ background: 'var(--warning)' }} />Drawdown · price terms — not account currency</span>
+          <span title="Peak-to-trough decline of the closed-trade PnL curve. This is not floating intratrade drawdown.">
+            <i style={{ background: 'var(--warning)' }} />
+            {accountReady ? 'Realized Balance Drawdown' : 'Closed-Trade Drawdown'}
+            <span className="meta"> · {accountReady ? (run?.account.currency ?? 'account currency') : 'Price terms'}</span>
+          </span>
         ) : showBalance ? (
-          <span><i style={{ background: blue }} />Balance · account currency</span>
+          <span title="Realized balance from closed trades; not tick-by-tick floating equity.">
+            <i style={{ background: blue }} />Realized Account Balance
+            <span className="meta"> · {run?.account.currency ?? 'account currency'}</span>
+          </span>
         ) : (
-          <span><i style={{ background: blue }} />Cumulative PnL · price terms — not account currency</span>
+          <span title="Running total of closed-trade PnL in instrument price units.">
+            <i style={{ background: blue }} />Cumulative Trade PnL<span className="meta"> · Price terms</span>
+          </span>
         )}
         <span className="chart-hint">Trade #</span>
       </div>
       <dl className="equity-summary">
-        <div><dt>Final PnL</dt><dd>{fmt(pnl[pnl.length - 1] ?? 0)} <span className="meta">price terms</span></dd></div>
-        <div><dt>Max Drawdown</dt><dd>{fmt(drawdown.length ? Math.max(...drawdown) : 0)} <span className="meta">price terms</span></dd></div>
+        <div><dt>Cumulative Trade PnL</dt><dd>{fmt(pnl[pnl.length - 1] ?? 0)} <span className="meta">price terms</span></dd></div>
+        <div><dt>Closed-Trade Drawdown</dt><dd>{fmt(drawdown.length ? Math.max(...drawdown) : 0)} <span className="meta">price terms</span></dd></div>
         <div>
-          <dt>Balance</dt>
+          <dt>Realized Balance</dt>
           <dd>{finalBalance !== null ? fmt(finalBalance) : 'Not available'}</dd>
         </div>
         <div>

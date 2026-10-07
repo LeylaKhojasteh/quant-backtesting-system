@@ -11,6 +11,8 @@ type Metric = {
   label: string;
   value: string;
   note: string;
+  /** Optional short supporting value shown under the number (not a sentence). */
+  sub?: string;
   tone?: 'good' | 'bad';
   pending?: boolean;
   reason?: string | string[];
@@ -32,7 +34,7 @@ function Card({ m }: { m: Metric }) {
     );
   }
   return (
-    <div className={m.pending ? 'metric-pending' : undefined}>
+    <div className="metric-cell">
       <span>
         {m.label}
         <Tooltip>
@@ -44,8 +46,8 @@ function Card({ m }: { m: Metric }) {
           <TooltipContent className="max-w-80">{m.note}</TooltipContent>
         </Tooltip>
       </span>
-      <strong className={m.tone ? `${m.tone}-text` : m.pending ? 'muted' : undefined}>{m.value}</strong>
-      <small>{m.note}</small>
+      <strong className={m.tone ? `${m.tone}-text` : undefined}>{m.value}</strong>
+      {m.sub && <small>{m.sub}</small>}
     </div>
   );
 }
@@ -57,21 +59,22 @@ function stdev(v: number[]) {
 }
 
 /**
- * Grouped performance metrics, fed by the single BacktestRun.
+ * Disciplined two-tier metric system fed by the single BacktestRun.
  *
- * Price-term statistics render as numbers. Account-level statistics
- * (Return %, Sharpe, Balance) render "Not available" with the exact reason,
- * because the seeded run has no account-currency model.
+ * Tier 1 (primary) carries the headline outcome; tier 2 (detail) carries the
+ * supporting metrics. Price-term statistics render as numbers. Account-level
+ * statistics (Return %, Sharpe, Balance) render Pending with the exact reason,
+ * because a price-term run has no account-currency model. No zero is faked.
  */
 export function PerformanceMetricsBar({ aside }: { aside?: React.ReactNode }) {
   const state = useRun();
   if (state.status !== 'ready') {
     return (
       <div className="metrics-grouped">
-        <div className="metrics-group">
-          <span className="metrics-group-title">Performance</span>
-          <div className="metrics-group-cells">
-            <div className="metric-pending">
+        <div className="metric-tier primary">
+          <div className="metric-tier-head"><span className="metric-tier-title">Performance</span></div>
+          <div className="metric-tier-cells primary">
+            <div className="metric-cell">
               <span>{state.status === 'loading' ? 'Loading run…' : 'Load error'}</span>
               <strong className="muted">{NOT_AVAILABLE}</strong>
               <small>{state.status === 'error' ? state.error : state.status === 'malformed' ? state.message : ''}</small>
@@ -129,100 +132,72 @@ export function PerformanceMetricsBar({ aside }: { aside?: React.ReactNode }) {
           required: ['Account currency', 'Initial balance', 'Account-currency PnL'],
         };
 
-  const groups: { title: string; items: Metric[] }[] = [
+  // Tier 1 — the headline outcome. These visually dominate.
+  const primary: Metric[] = [
+    { label: 'Total PnL', value: fmt(p.netPnl), note: 'Net closed-trade PnL · price terms, not account currency.', tone: p.netPnl < 0 ? 'bad' : 'good' },
+    { label: 'Total Trades', value: String(p.trades), note: 'Executed reference trades' },
+    { label: 'Win Rate', value: `${(p.winRate ?? 0).toFixed(2)}%`, note: 'Winning closed trades divided by total closed trades.', sub: `${p.wins} wins / ${p.losses} losses` },
+    { label: 'Profit Factor', value: p.profitFactor !== null && p.profitFactor !== undefined ? p.profitFactor.toFixed(2) : NOT_AVAILABLE, note: 'Gross profit / absolute gross loss · price terms' },
+    { label: 'Max Drawdown', value: p.maxDrawdown !== null && p.maxDrawdown !== undefined ? p.maxDrawdown.toFixed(2) : NOT_AVAILABLE, note: 'Peak-to-trough decline of the closed-trade PnL curve · price terms', tone: 'bad' },
+  ];
+
+  // Tier 2 — supporting metrics, denser and quieter.
+  const detail: Metric[] = [
+    { label: 'Average PnL', value: fmt(p.avgPnl), note: 'Mean PnL per trade · price terms', tone: p.avgPnl < 0 ? 'bad' : 'good' },
+    { label: 'Expectancy', value: fmt(p.avgPnl), note: 'Average expected PnL per trade · price terms.', tone: p.avgPnl < 0 ? 'bad' : 'good' },
+    { label: 'Recovery Factor', value: p.maxDrawdown ? fmt(p.netPnl / p.maxDrawdown) : NOT_AVAILABLE, note: 'Net price PnL divided by maximum closed-trade PnL drawdown · price terms', tone: p.netPnl < 0 ? 'bad' : 'good' },
+    { label: 'Risk Reward', value: p.payoff !== null && p.payoff !== undefined ? p.payoff.toFixed(2) : NOT_AVAILABLE, note: 'Average win divided by average loss · price terms' },
+    { label: 'Max Losing Streak', value: String(p.maxLosingStreak ?? 0), note: 'Longest run of consecutive losing trades', tone: 'bad' },
+    { label: 'Volatility', value: volatility.toFixed(2), note: 'Standard deviation of per-trade PnL · price terms' },
+    { label: 'Long / Short', value: `${longs} / ${shorts}`, note: 'Executed LONG and SHORT trades' },
+    { label: 'Average Win', value: fmt(p.avgWin), note: 'Mean PnL of winning trades · price terms', tone: 'good' },
+    { label: 'Average Loss', value: fmt(p.avgLoss), note: 'Mean PnL of losing trades · price terms', tone: 'bad' },
+    { label: 'Best Trade', value: fmt(Math.max(...pnls)), note: 'Largest single-trade PnL · price terms', tone: 'good' },
+    { label: 'Worst Trade', value: fmt(Math.min(...pnls)), note: 'Largest single-trade loss · price terms', tone: 'bad' },
+    { label: 'Avg Duration', value: `${(p.avgDurationMin ?? 0).toFixed(0)} min`, note: 'Mean time in trade, entry to exit · UTC' },
+    ...(accountReady
+      ? [
+          { label: 'Net Account PnL', value: fmt(acctNet ?? 0), note: `Realized account PnL · ${run.account.currency ?? ''} (after commission)`, tone: (acctNet ?? 0) < 0 ? 'bad' as const : 'good' as const },
+          { label: 'Commission', value: fmt(acctCommission ?? 0), note: `Total round-turn commission · ${run.account.currency ?? ''}` },
+          ...(dd
+            ? [{ label: 'Realized DD', value: dd.maxDrawdown !== null ? fmt(dd.maxDrawdown) : NOT_AVAILABLE, note: `Max realized-balance drawdown${dd.maxDrawdownPct !== null ? ` · ${dd.maxDrawdownPct.toFixed(2)}%` : ''} · account currency`, tone: 'bad' as const }]
+            : []),
+        ]
+      : []),
     {
-      title: 'Performance',
-      items: [
-        { label: 'Total Trades', value: String(p.trades), note: 'Executed reference trades' },
-        { label: 'Win Rate', value: `${(p.winRate ?? 0).toFixed(2)}%`, note: `${p.wins} win / ${p.losses} losses` },
-        { label: 'Total PnL', value: fmt(p.netPnl), note: 'PnL is expressed in price terms, not account currency.', tone: p.netPnl < 0 ? 'bad' : 'good' },
-        { label: 'Average PnL', value: fmt(p.avgPnl), note: 'Mean PnL per trade · price terms', tone: p.avgPnl < 0 ? 'bad' : 'good' },
-        { label: 'Profit Factor', value: p.profitFactor !== null && p.profitFactor !== undefined ? p.profitFactor.toFixed(2) : NOT_AVAILABLE, note: 'Gross profit / absolute gross loss · price terms' },
-        {
-          label: 'Expectancy',
-          value: fmt(p.avgPnl),
-          note: 'Average expected PnL per trade · price terms.',
-          tone: p.avgPnl < 0 ? 'bad' : 'good',
-        },
-        {
-          label: 'Sharpe Ratio',
-          value: NOT_AVAILABLE,
-          note: 'Standard Sharpe requires a valid account return series (periodic returns). Seven price-term trades are not a return series.',
-          pending: true,
-          reason: 'Standard Sharpe requires a valid account return series (periodic returns). Seven price-term trades are not a return series.',
-          required: ['Account return series per period', 'Risk-free rate', 'Account currency'],
-        },
-        returnItem,
-        ...(accountReady
-          ? [
-              {
-                label: 'Net Account PnL',
-                value: fmt(acctNet ?? 0),
-                note: `Realized account PnL · ${run.account.currency ?? ''} (after commission)`,
-                tone: (acctNet ?? 0) < 0 ? 'bad' as const : 'good' as const,
-              },
-              {
-                label: 'Commission',
-                value: fmt(acctCommission ?? 0),
-                note: `Total round-turn commission · ${run.account.currency ?? ''}`,
-              },
-            ]
-          : []),
-      ],
+      label: 'Sharpe Ratio',
+      value: NOT_AVAILABLE,
+      note: 'Standard Sharpe requires a valid account return series (periodic returns). Seven price-term trades are not a return series.',
+      pending: true,
+      reason: 'Standard Sharpe requires a valid account return series (periodic returns). Seven price-term trades are not a return series.',
+      required: ['Account return series per period', 'Risk-free rate', 'Account currency'],
     },
-    {
-      title: 'Risk',
-      items: [
-        { label: 'Max Drawdown', value: p.maxDrawdown !== null && p.maxDrawdown !== undefined ? p.maxDrawdown.toFixed(2) : NOT_AVAILABLE, note: 'Largest peak-to-trough decline of the closed-trade PnL curve · price terms', tone: 'bad' },
-        { label: 'Recovery Factor', value: p.maxDrawdown ? fmt(p.netPnl / p.maxDrawdown) : NOT_AVAILABLE, note: 'Net price PnL divided by maximum closed-trade PnL drawdown · price terms', tone: p.netPnl < 0 ? 'bad' : 'good' },
-        { label: 'Risk Reward', value: p.payoff !== null && p.payoff !== undefined ? p.payoff.toFixed(2) : NOT_AVAILABLE, note: 'Average win divided by average loss · price terms' },
-        { label: 'Max Losing Streak', value: String(p.maxLosingStreak ?? 0), note: 'Longest run of consecutive losing trades', tone: 'bad' },
-        {
-          label: 'Volatility',
-          value: volatility.toFixed(2),
-          note: 'Standard deviation of per-trade PnL · price terms',
-        },
-        ...(accountReady && dd
-          ? [
-              {
-                label: 'Realized DD',
-                value: dd.maxDrawdown !== null ? fmt(dd.maxDrawdown) : NOT_AVAILABLE,
-                note: `Max realized-balance drawdown${dd.maxDrawdownPct !== null ? ` · ${dd.maxDrawdownPct.toFixed(2)}%` : ''} · account currency`,
-                tone: 'bad' as const,
-              },
-            ]
-          : []),
-      ],
-    },
-    {
-      title: 'Trade Statistics',
-      items: [
-        { label: 'Long Trades', value: String(longs), note: 'Executed LONG trades' },
-        { label: 'Short Trades', value: String(shorts), note: 'Executed SHORT trades' },
-        { label: 'Average Win', value: fmt(p.avgWin), note: 'Mean PnL of winning trades · price terms', tone: 'good' },
-        { label: 'Average Loss', value: fmt(p.avgLoss), note: 'Mean PnL of losing trades · price terms', tone: 'bad' },
-        { label: 'Best Trade', value: fmt(Math.max(...pnls)), note: 'Largest single-trade PnL · price terms', tone: 'good' },
-        { label: 'Worst Trade', value: fmt(Math.min(...pnls)), note: 'Largest single-trade loss · price terms', tone: 'bad' },
-        { label: 'Avg Duration', value: `${(p.avgDurationMin ?? 0).toFixed(0)} min`, note: 'Mean time in trade, entry to exit · UTC' },
-        balanceItem,
-      ],
-    },
+    returnItem,
+    balanceItem,
   ];
 
   return (
     <TooltipProvider delayDuration={200}>
       <div className="metrics-grouped">
         <div className="metrics-groups">
-          {groups.map((g) => (
-            <div className="metrics-group" key={g.title}>
-              <span className="metrics-group-title">{g.title}</span>
-              <div className="metrics-group-cells">
-                {g.items.map((m) => (
-                  <Card key={m.label} m={m} />
-                ))}
-              </div>
+          <div className="metric-tier primary">
+            <div className="metric-tier-head">
+              <span className="metric-tier-title">Performance</span>
+              <span className="meta">price terms · returned metrics only</span>
             </div>
-          ))}
+            <div className="metric-tier-cells primary">
+              {primary.map((m) => <Card key={m.label} m={m} />)}
+            </div>
+          </div>
+          <div className="metric-tier secondary">
+            <div className="metric-tier-head">
+              <span className="metric-tier-title">Detail</span>
+              <span className="meta">supporting metrics · pending stays truthful</span>
+            </div>
+            <div className="metric-tier-cells secondary">
+              {detail.map((m) => <Card key={m.label} m={m} />)}
+            </div>
+          </div>
         </div>
         {aside}
       </div>

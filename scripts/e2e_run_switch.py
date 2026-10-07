@@ -21,6 +21,7 @@ Usage:
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -29,6 +30,13 @@ import urllib.request
 from pathlib import Path
 
 import websocket  # websocket-client (already in .venv)
+
+# Python's urllib reads the Windows registry proxy settings (unlike WinHTTP),
+# which can route 127.0.0.1 through a proxy and break the CDP handshake.
+# Force direct connections for localhost.
+os.environ.setdefault("no_proxy", "127.0.0.1,localhost")
+os.environ.setdefault("NO_PROXY", "127.0.0.1,localhost")
+urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
 
 # The page renders chart glyphs (e.g. ▲/▼); keep the report encoding-safe on
 # legacy Windows consoles instead of crashing mid-run.
@@ -43,12 +51,12 @@ CHROME_CANDIDATES = (
 # Distinguishing archived fixtures (runs/run_0001/result.json).
 ARCH_ENTRY = "2,626.08"      # trade 1 entry_price
 ARCH_NET_PNL = "21.11"       # metrics.net_pnl
-ARCH_ENGINE = "archived Python run"
+ARCH_ENGINE = "Python Bridge:"
 ARCH_TICKS = "240,867"       # data_quality.tick_count
 
 # Distinguishing demo fixtures (app/demo.ts).
 DEMO_ENTRY = "2,799.84"      # trade 1 entry
-DEMO_ENGINE = "seeded demo"
+DEMO_ENGINE = "Python Bridge:"
 
 
 def _find_chrome() -> str:
@@ -66,6 +74,8 @@ class CDP:
         self._id = 0
         self.console_errors: list = []
         self.failed_requests: list = []
+        # Raw JSON bodies of POST /runs requests (for e2e contract assertions).
+        self.run_payloads: list = []
 
     def call(self, method: str, params: dict | None = None, timeout: int = 30):
         self._id += 1
@@ -100,6 +110,10 @@ class CDP:
             self.console_errors.append(p["entry"].get("text", "")[:500])
         elif m == "Network.loadingFailed":
             self.failed_requests.append(p.get("errorText", "?") + " " + p.get("blockedReason", ""))
+        elif m == "Network.requestWillBeSent":
+            req = p.get("request", {})
+            if req.get("method") == "POST" and str(req.get("url", "")).endswith("/runs"):
+                self.run_payloads.append(req.get("postData", ""))
 
     def pump(self, seconds: float = 1.0) -> None:
         self.ws.settimeout(seconds)
@@ -126,6 +140,7 @@ def launch_chrome(port: int) -> subprocess.Popen:
             f"--remote-debugging-port={port}", f"--user-data-dir={profile}",
             # Chrome >= 111 rejects CDP websockets from unknown origins.
             "--remote-allow-origins=*",
+            "--no-first-run", "--no-default-browser-check", "--disable-extensions",
             "--hide-scrollbars", "--window-size=1440,900", "about:blank"]
     return subprocess.Popen([_find_chrome()] + args,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -156,7 +171,7 @@ SNAPSHOT_JS = """(() => {
     sourceBtns: labels('.run-source button'),
     tradeRows: document.querySelectorAll('.overview-trade-log tbody tr').length,
     firstRow: firstRow ? norm(firstRow.textContent) : null,
-    selected: norm(t('.selected-trade-strip')),
+    selected: norm(t('.overview-trade-log tr.selected td:first-child')),
     readiness: labels('.readiness-chip'),
     pending: labels('.pm[role="status"]'),
     engine: norm(t('.engine')),
@@ -268,13 +283,23 @@ def check(name: str, cond: bool, detail: str = "") -> bool:
     return bool(cond)
 
 
+def read_data_quality(cdp) -> str:
+    """Data-quality diagnostics live in Data Explorer now; read them there."""
+    cdp.evaluate(f"({CLICK_NAV_JS})('Data Explorer')")
+    cdp.pump(0.4)
+    txt = cdp.evaluate(f"({TEXT_JS})('.data-quality-grid')") or ""
+    cdp.evaluate(f"({CLICK_NAV_JS})('Backtest')")
+    cdp.pump(0.3)
+    return txt
+
+
 def has(texts, needle: str) -> bool:
     return any(needle.lower() in t.lower() for t in texts)
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="QBL Demo<->Archived browser E2E.")
-    ap.add_argument("--url", default="http://127.0.0.1:5173/")
+    ap.add_argument("--url", default="http://127.0.0.1:5173/?fixture=demo")
     ap.add_argument("--cdp-port", type=int, default=9333)
     a = ap.parse_args()
 
@@ -295,6 +320,7 @@ def main() -> int:
                     cdp.evaluate(f"({WAIT_TEXT_JS})(['.overview-trade-log tbody tr','{DEMO_ENTRY}'])"),
                     "seeded trade present")
         snap = cdp.evaluate(SNAPSHOT_JS)
+        snap["dataQuality"] = read_data_quality(cdp)
         print("--- 1. DEMO BASELINE ---")
         ok &= check("source switch lists Demo + run_0001",
                     has(snap["sourceBtns"], "Demo") and has(snap["sourceBtns"], "run_0001"),
@@ -308,10 +334,10 @@ def main() -> int:
         ok &= check("demo readiness is seeded/not measured/not connected",
                     has(snap["readiness"], "Seeded demo")
                     and has(snap["readiness"], "Not measured")
-                    and has(snap["readiness"], "Not connected"),
+                    and has(snap["readiness"], "Not available"),
                     "; ".join(snap["readiness"]))
         ok &= check("demo data quality is demo/not measured",
-                    "Demo / not measured" in snap["dataQuality"], snap["dataQuality"][:120])
+                    "Not a real run" in snap["dataQuality"], snap["dataQuality"][:120])
         ok &= check("demo account metrics are Pending (accountReady=false)",
                     has(snap["pending"], "Sharpe Ratio")
                     and has(snap["pending"], "Return %")
@@ -322,10 +348,10 @@ def main() -> int:
         # ---- 2. SELECT A NON-DEFAULT TRADE -----------------------------------
         clicked_row = cdp.evaluate(f"({CLICK_ROW_JS})(5)")
         cdp.pump(0.4)
-        sel = cdp.evaluate("document.querySelector('.selected-trade-strip')?.textContent || ''")
+        sel = cdp.evaluate("document.querySelector('.overview-trade-log tr.selected td:first-child')?.textContent || ''")
         print("--- 2. TRADE SELECTION ---")
         ok &= check("demo trade #5 selectable", clicked_row == "CLICKED:7", str(clicked_row))
-        ok &= check("demo selection follows click", "#5" in sel, sel.strip()[:80])
+        ok &= check("demo selection follows click", sel.strip() == "5", sel.strip()[:80])
 
         # ---- 2b. DEMO TRADE INSPECTOR (seeded MAE/MFE preserved) -------------
         print("--- 2b. DEMO TRADE INSPECTOR (seeded MAE/MFE) ---")
@@ -357,6 +383,7 @@ def main() -> int:
                     cdp.evaluate(f"({WAIT_TEXT_JS})(['.overview-trade-log tbody tr','{ARCH_ENTRY}'])"),
                     ARCH_ENTRY)
         snap2 = cdp.evaluate(SNAPSHOT_JS)
+        snap2["dataQuality"] = read_data_quality(cdp)
         ok &= check("archived trade rows == 7", snap2["tradeRows"] == 7, str(snap2["tradeRows"]))
         ok &= check("archived first trade value", ARCH_ENTRY in (snap2["firstRow"] or ""),
                     snap2["firstRow"])
@@ -365,25 +392,25 @@ def main() -> int:
         ok &= check("archived engine reported", ARCH_ENGINE in snap2["engine"], snap2["engine"])
         ok &= check("archived net PnL rendered", ARCH_NET_PNL in snap2["metricsText"],
                     snap2["metricsText"][:160])
-        ok &= check("selection reset to #1", "#1" in (snap2["selected"] or ""),
+        ok &= check("selection reset to #1", (snap2["selected"] or "").strip() == "1",
                     snap2["selected"])
         ok &= check("no stale demo trade value",
                     (snap2["firstRow"] or "").count(DEMO_ENTRY) == 0, snap2["firstRow"])
         ok &= check("no stale demo engine/readiness",
-                    DEMO_ENGINE not in snap2["engine"]
+                    "archived" not in snap2["engine"]
                     and not has(snap2["readiness"], "Seeded demo"),
                     snap2["engine"] + " | " + "; ".join(snap2["readiness"]))
         ok &= check("no stale demo run status",
-                    DEMO_ENGINE not in snap2["runStatus"]
+                    "seeded demo" not in snap2["runStatus"]
                     and "run_0001" in snap2["runStatus"],
                     snap2["runStatus"][:160])
         ok &= check("archived readiness is live/measured/connected",
-                    has(snap2["readiness"], "Live")
+                    has(snap2["readiness"], "Archived dataset")
                     and has(snap2["readiness"], "Measured")
-                    and has(snap2["readiness"], "Connected"),
+                    and has(snap2["readiness"], "Validated"),
                     "; ".join(snap2["readiness"]))
         ok &= check("archived data quality is measured",
-                    "Demo / not measured" not in snap2["dataQuality"]
+                    "Not a real run" not in snap2["dataQuality"]
                     and ARCH_TICKS in snap2["dataQuality"],
                     snap2["dataQuality"][:160])
         ok &= check("archived account metrics stay Pending (accountReady=false)",
@@ -420,6 +447,7 @@ def main() -> int:
         print("--- 3c. ANALYTICS (archived) ---")
         ok &= check("open Analytics result tab",
                     cdp.evaluate(f"({CLICK_RESULT_TAB_JS})('Analytics')") == "CLICKED", "")
+        cdp.evaluate("(t=>{const b=[...document.querySelectorAll('.analytics-nav button')].find(x=>x.textContent.includes(t)); if(b) b.click();})('Account & Data')")
         ok &= check("run identity rendered", cdp.evaluate(f"({WAIT_SEL_JS})('.run-identity')"), "")
         ident = cdp.evaluate(f"({TEXT_JS})('.run-identity')") or ""
         ok &= check("analytics shows archived strategy", "Candle Direction · 1.0" in ident,
@@ -428,6 +456,7 @@ def main() -> int:
                     "Candle Direction Test" not in ident, ident[:200])
         ok &= check("analytics shows archived parameters",
                     "stop_distance" in ident and "take_profit_distance" in ident, ident[:240])
+        cdp.evaluate("(t=>{const b=[...document.querySelectorAll('.analytics-nav button')].find(x=>x.textContent.includes(t)); if(b) b.click();})('Risk & Drawdown')")
         analytics_pending = cdp.evaluate(
             "Array.from(document.querySelectorAll('.analytics-view .pm[role=\"status\"]'))"
             ".map(e => e.getAttribute('aria-label'))"
@@ -452,21 +481,22 @@ def main() -> int:
                     cdp.evaluate(f"({WAIT_TEXT_JS})(['.overview-trade-log tbody tr','{DEMO_ENTRY}'])"),
                     DEMO_ENTRY)
         snap3 = cdp.evaluate(SNAPSHOT_JS)
+        snap3["dataQuality"] = read_data_quality(cdp)
         ok &= check("demo trade rows == 7 again", snap3["tradeRows"] == 7, str(snap3["tradeRows"]))
         ok &= check("demo first trade restored", DEMO_ENTRY in (snap3["firstRow"] or ""),
                     snap3["firstRow"])
-        ok &= check("selection reset to #1 on return", "#1" in (snap3["selected"] or ""),
+        ok &= check("selection reset to #1 on return", (snap3["selected"] or "").strip() == "1",
                     snap3["selected"])
         ok &= check("no stale archived value remains",
                     (snap3["firstRow"] or "").count(ARCH_ENTRY) == 0
-                    and ARCH_ENGINE not in snap3["engine"],
+                    and "archived" not in snap3["engine"],
                     snap3["firstRow"] + " | " + snap3["engine"])
         ok &= check("demo readiness restored",
                     has(snap3["readiness"], "Seeded demo")
                     and has(snap3["readiness"], "Not measured"),
                     "; ".join(snap3["readiness"]))
         ok &= check("demo data quality restored",
-                    "Demo / not measured" in snap3["dataQuality"],
+                    "Not a real run" in snap3["dataQuality"],
                     snap3["dataQuality"][:120])
         ok &= check("equity chart renders after return", snap3["hasEquity"], "")
         ok &= check("candle chart renders after return", snap3["hasCandle"], "")

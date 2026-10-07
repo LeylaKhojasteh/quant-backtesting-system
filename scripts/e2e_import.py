@@ -40,7 +40,7 @@ from scripts.e2e_run_switch import (  # noqa: E402
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-APP_URL = "http://127.0.0.1:5173/"
+APP_URL = "http://127.0.0.1:5173/?fixture=demo"
 BRIDGE_PORT = 8765
 BRIDGE_URL = f"http://127.0.0.1:{BRIDGE_PORT}"
 PUBLIC = ROOT / "Quant-Backtest-Lab" / "public"
@@ -142,6 +142,18 @@ def current_error(cdp: CDP) -> str:
     return cdp.evaluate("document.querySelector('.rr-import .rr-error')?.textContent || ''")
 
 
+def escape(cdp):
+    cdp.call("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27})
+    cdp.call("Input.dispatchKeyEvent", {"type": "keyUp", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27})
+
+
+def click_aria(cdp, label):
+    return cdp.evaluate(
+        "(label => { const el=document.querySelector('[aria-label=\"'+label.replace(/\"/g,'\\\\\"')+'\"]');"
+        " if(!el) return 'NO'; for (const t of ['pointerdown','mousedown','mouseup','click']) el.dispatchEvent(new MouseEvent(t,{bubbles:true,cancelable:true,view:window})); return 'OK'; })"
+        f"({json.dumps(label)})")
+
+
 def pick_file(cdp: CDP, path: Path) -> dict:
     """Set the hidden file input and wait for the import to settle."""
     prev = current_error(cdp)
@@ -213,6 +225,8 @@ def main() -> int:
         ok &= check("catalog refreshed (no reload): imported selected", cdp.evaluate(
             f"({WAIT_TEXT_JS})(['[aria-label=\"Real run strategy\"]','EMA Cross'])"),
             cdp.evaluate(f"({TEXT_JS})('[aria-label=\"Real run strategy\"]')"))
+        click_aria(cdp, "Strategy & Trade Settings")
+        cdp.evaluate(f"({WAIT_SEL_JS})('[aria-label=\"Strategy parameter fast_period\"]')")
         ok &= check("generic parameters appear", cdp.evaluate(
             "(() => { const f=document.querySelector('[aria-label=\"Strategy parameter fast_period\"]');"
             " const s=document.querySelector('[aria-label=\"Strategy parameter slow_period\"]');"
@@ -249,6 +263,8 @@ def main() -> int:
         set_input(cdp, '[aria-label="Strategy parameter slow_period"]', "5")
         set_input(cdp, '[aria-label="Run start date"]', "2025-01-02")
         set_input(cdp, '[aria-label="Run end date"]', "2025-01-02")
+        escape(cdp)
+        time.sleep(0.4)
         runs_before = cdp.evaluate("document.querySelectorAll('.run-source button').length")
         ok &= check("Run enabled", cdp.evaluate(WAIT_ENABLED_JS))
         cdp.evaluate(INSTALL_OBSERVER_JS)
@@ -261,7 +277,7 @@ def main() -> int:
         ok &= check("exactly one new run (duplicate clicks ignored)", runs_after == runs_before + 1, f"{runs_before} -> {runs_after}")
 
         status_text = cdp.evaluate(f"({TEXT_JS})('.run-status')") or ""
-        m = re.search(r"Archived reference · (\S+) ·", status_text)
+        m = re.search(r"Archived Run · (\S+) ·", status_text)
         new_run = m.group(1) if m else None
         ok &= check("UI switched to new run", bool(new_run), status_text[:120])
 

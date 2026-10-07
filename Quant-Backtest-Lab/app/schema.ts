@@ -29,8 +29,10 @@ export type DataQualityStatus = (typeof DataQualityStatus)[number];
 export const TradeSchema = z.object({
   id: z.number().int().positive(),
   direction: z.enum(['LONG', 'SHORT']),
-  /** ISO-8601 UTC timestamp the signal became available. */
+  /** ISO-8601 UTC timestamp the signal candle opened. */
   signalTimeUtc: z.string().datetime({ offset: false }),
+  /** ISO-8601 UTC timestamp the signal became tradable (>= signalTimeUtc). */
+  signalAvailableUtc: z.string().datetime({ offset: false }).optional(),
   entryTimeUtc: z.string().datetime({ offset: false }),
   exitTimeUtc: z.string().datetime({ offset: false }),
   /** Price terms only — entry/exit fills and raw PnL. Never account currency. */
