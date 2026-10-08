@@ -24,7 +24,9 @@ from src.result_contract import utc_now_iso
 
 DEFAULT_MAX_CANDIDATES = 100
 HARD_MAX_CANDIDATES = 500
-DEFAULT_STUDIES = "studies"
+from src import config  # noqa: E402
+
+DEFAULT_STUDIES = str(config.STUDIES_DIR)
 
 #: Metrics that actually exist in BacktestResult and may be ranked.
 OBJECTIVE_METRICS = (

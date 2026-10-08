@@ -42,7 +42,9 @@ from pathlib import Path
 from src import run_errors, run_library
 from src.result_contract import utc_now_iso
 
-DEFAULT_MONTE_CARLO = "montecarlo"
+from src import config  # noqa: E402
+
+DEFAULT_MONTE_CARLO = str(config.MONTECARLO_DIR)
 DEFAULT_SIMULATIONS = 1000
 HARD_MAX_SIMULATIONS = 5000
 MIN_TRADES = 2

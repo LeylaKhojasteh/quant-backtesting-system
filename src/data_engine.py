@@ -37,13 +37,15 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from src import config
+
 # --------------------------------------------------------------------------
 # Constants / contracts
 # --------------------------------------------------------------------------
 
 DATA_CACHE_SCHEMA_VERSION = 1
-DEFAULT_CACHE_ROOT = Path("cache") / "market_data"
-DEFAULT_DATA_DIR = Path("data")
+DEFAULT_CACHE_ROOT = config.CACHE_ROOT
+DEFAULT_DATA_DIR = config.DATA_DIR
 PROVIDER_DIR = "DUKAS"
 
 CANONICAL_COLUMNS = ("timestamp", "bid", "ask", "bid_volume", "ask_volume", "source_row")

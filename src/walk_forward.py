@@ -32,7 +32,9 @@ from pathlib import Path
 from src import optimization, run_backtest, run_errors, run_request
 from src.result_contract import utc_now_iso
 
-DEFAULT_WALKFORWARDS = "walkforwards"
+from src import config  # noqa: E402
+
+DEFAULT_WALKFORWARDS = str(config.WALKFORWARDS_DIR)
 
 #: Safety limits (centralized + tested). Never silently truncated.
 DEFAULT_MAX_FOLDS = 10

@@ -5,8 +5,7 @@ import { Minus, Plus, RotateCcw } from 'lucide-react';
 import { candles, fmt, time, ticks, tradePath, trades, type Candle, type Trade } from './demo';
 import { excursions } from './analytics';
 import { useRun } from './run-context';
-import { formatUtc, formatUtcMs } from './utc';
-import { PendingMetric } from './pending-metric';
+import { formatUtcMs } from './utc';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
 const green = 'var(--success)';

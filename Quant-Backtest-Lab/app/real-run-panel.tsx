@@ -1,6 +1,6 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Activity, AlertTriangle, Loader2, Play, RefreshCw, Upload, Settings2, Wallet } from 'lucide-react';
+import { AlertTriangle, Loader2, Play, RefreshCw, Upload, Settings2 } from 'lucide-react';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { useBridge } from './bridge-status';
@@ -72,9 +72,9 @@ export function RealRunPanel() {
   const [startingBalance, setStartingBalance] = useState('10000');
   const [positionLots, setPositionLots] = useState('1');
   const [commission, setCommission] = useState('0');
-  const [contractSize, setContractSize] = useState('100');
-  const [quoteCurrency, setQuoteCurrency] = useState('USD');
-  const [tickSize, setTickSize] = useState('0.01');
+  const [, setContractSize] = useState('100');
+  const [, setQuoteCurrency] = useState('USD');
+  const [, setTickSize] = useState('0.01');
 
   const [running, setRunning] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);

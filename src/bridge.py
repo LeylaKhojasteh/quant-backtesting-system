@@ -56,6 +56,7 @@ from urllib.parse import unquote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from src import config  # noqa: E402
 from src import run_errors  # noqa: E402
 from src import optimization, run_backtest, run_comparison, run_library, run_request  # noqa: E402
 from src import walk_forward  # noqa: E402
@@ -64,11 +65,11 @@ from src import monte_carlo  # noqa: E402
 from src import strategy_import, strategy_library, strategy_loader  # noqa: E402
 
 SERVICE = "quant-backtest-bridge"
-VERSION = "0.1.0"
-DEFAULT_HOST = "127.0.0.1"
-DEFAULT_PORT = 8765
-DEFAULT_STRATEGY_DIR = "strategies"
-DEFAULT_DATA_DIR = "data"
+VERSION = config.VERSION
+DEFAULT_HOST = config.BRIDGE_HOST
+DEFAULT_PORT = config.BRIDGE_PORT
+DEFAULT_STRATEGY_DIR = str(config.STRATEGY_DIR)
+DEFAULT_DATA_DIR = str(config.DATA_DIR)
 MAX_BODY_BYTES = 1 << 20  # 1 MiB is plenty for a run request
 
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]"}

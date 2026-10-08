@@ -18,7 +18,9 @@ from pathlib import Path
 
 from src import publish_run, run_errors, run_store
 
-DEFAULT_RUNS = "runs"
+from src import config  # noqa: E402
+
+DEFAULT_RUNS = str(config.RUNS_DIR)
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]*$")
 _METRIC_KEYS = ("total_trades", "win_rate", "net_pnl", "profit_factor")
 _ENGINE_PARAM_KEYS = ("stop_distance", "take_profit_distance", "timeframe", "symbol")

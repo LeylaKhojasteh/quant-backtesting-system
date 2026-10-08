@@ -28,17 +28,6 @@ const PARAMETERS_SNAPSHOT = { stopDistance: 5, takeProfitDistance: 10, timeframe
  * engine is wired up; today it throws so a half-wired state fails loudly
  * instead of pretending to be data.
  */
-export async function requestEngineRun(_: {
-  strategyVersion: string;
-  parameters: Record<string, unknown>;
-  startUtc: string;
-  endUtc: string;
-}): Promise<BacktestRun> {
-  throw new Error(
-    'Python backtest engine is not wired. Use loadBacktestRun() for the seeded demo, or connect the engine adapter before calling this boundary.',
-  );
-}
-
 /** Reasons every account-level metric must stay Pending for the demo run. */
 const ACCOUNT_UNAVAILABLE_REASONS = [
   'No account currency configured — price-term engine only.',

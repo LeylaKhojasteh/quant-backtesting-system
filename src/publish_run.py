@@ -36,8 +36,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.result_contract import BacktestResult  # noqa: E402
 
-DEFAULT_RUNS = "runs"
-DEFAULT_PUBLIC = "Quant-Backtest-Lab/public"
+from src import config  # noqa: E402
+
+DEFAULT_RUNS = str(config.RUNS_DIR)
+DEFAULT_PUBLIC = str(config.PUBLIC_DIR)
 MANIFEST_NAME = "adapters-run-manifest.json"
 
 

@@ -253,7 +253,11 @@ def execute_run(
         if cache_run:
             from src import data_engine
             if isinstance(exc, data_engine.DataEngineError):
-                raise run_errors.DataNotPreparedError(str(exc)) from exc
+                raise run_errors.DataNotPreparedError(
+                    "Derived market data has not been prepared for "
+                    f"{request.market.dataset_id or request.market.symbol} "
+                    f"{request.market.timeframe}. Run the data preparation command."
+                ) from exc
         raise run_errors.InvalidDatasetError(f"failed to load dataset {data_path}: {exc}") from exc
 
     # Hand the strategy its effective parameters, then generate normalized

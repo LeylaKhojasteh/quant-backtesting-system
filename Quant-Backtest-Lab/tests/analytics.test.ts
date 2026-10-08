@@ -170,18 +170,8 @@ describe('runner.ts - BacktestRun loader', () => {
     }
   });
 
-  test('requestEngineRun throws with not-wired message', async () => {
-    const { requestEngineRun } = await import('../app/runner.js');
-    try {
-      await requestEngineRun({
-        strategyVersion: 'test',
-        parameters: {},
-        startUtc: '2025-01-31T00:00:00Z',
-        endUtc: '2025-01-31T22:00:00Z',
-      });
-      assert.fail('Should have thrown');
-    } catch (e) {
-      assert.ok((e as Error).message.includes('Python backtest engine is not wired'));
-    }
+  test('requestEngineRun boundary is not part of the v1 product surface', async () => {
+    const runner = await import('../app/runner.js');
+    assert.equal('requestEngineRun' in runner, false);
   });
 });

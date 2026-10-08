@@ -1,0 +1,10 @@
+# Quant Backtest Lab — Python runtime dependencies.
+# Install: .venv\Scripts\python.exe -m pip install -r requirements.txt
+
+pandas>=2.0
+numpy>=1.24
+pyarrow>=14.0
+
+# Development / testing (browser E2E harness + unit tests)
+pytest>=7.0
+websocket-client>=1.6

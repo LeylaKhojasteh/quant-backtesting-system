@@ -21,7 +21,7 @@ import {
   type EnrichedTrade,
 } from './analytics';
 import { useRun } from './run-context';
-import { formatUtc, formatUtcMs } from './utc';
+import { formatUtcMs } from './utc';
 import { PendingMetric } from './pending-metric';
 
 const GREEN = 'var(--success)';
