@@ -1,0 +1,46 @@
+{
+  "name": "Full-Year Reference v1",
+  "dataset_id": "xauusd_dukas_ticks",
+  "symbol": "XAUUSD",
+  "timeframe": "15min",
+  "range": [
+    "2025-01-01",
+    "2025-12-31"
+  ],
+  "strategy": "candle_direction",
+  "execution": {
+    "stop_distance": 5.0,
+    "take_profit_distance": 10.0
+  },
+  "tick_count": 71413977,
+  "candle_count": 23638,
+  "signal_count": 23569,
+  "trade_count": 5749,
+  "long_trades": 2987,
+  "short_trades": 2762,
+  "total_pnl": -3711.54,
+  "profit_factor": 0.8223579165821086,
+  "max_drawdown": 3777.9800000000114,
+  "win_rate": 29.309445120890587,
+  "first_trade": {
+    "direction": "SHORT",
+    "signal_available_time": "2025-01-01 23:15:00Z",
+    "entry_time": "2025-01-01 23:15:00.076000Z",
+    "entry_price": 2624.59,
+    "exit_time": "2025-01-02 01:06:28.476000Z",
+    "exit_price": 2629.86,
+    "exit_reason": "SL",
+    "pnl_price": -5.269999999999982
+  },
+  "last_trade": {
+    "direction": "SHORT",
+    "signal_available_time": "2025-12-31 21:00:00Z",
+    "entry_time": "2025-12-31 21:00:00.062000Z",
+    "entry_price": 4313.31,
+    "exit_time": "2025-12-31 21:55:00.098000Z",
+    "exit_price": 4318.4,
+    "exit_reason": "SL",
+    "pnl_price": -5.089999999999236
+  },
+  "trades_digest": "sha256:9705b059c5e23e8401f62519bdd39bb513ccff57a74098a86674032a97c5e7ed"
+}

@@ -158,6 +158,16 @@ class ReaderTest(FixtureCase):
         self.assertEqual(ds["partitions"], 2)
         self.assertEqual(ds["coverage_start"][:10], "2099-01-01")
 
+    def test_reader_concatenation_is_chronological_and_projected(self):
+        # Multi-month load must be chronologically ordered by construction (no
+        # reliance on a whole-range sort) and honour column projection.
+        self._build()
+        frame = de.load_ticks_frame("cache:", symbol="TESTSYM", start="2099-01-01", end="2099-02-28",
+                                    root=self.root, columns=["timestamp", "bid", "ask"])
+        self.assertTrue(frame["timestamp"].is_monotonic_increasing)
+        self.assertEqual(list(frame.columns), ["timestamp", "bid", "ask"])
+        self.assertEqual(frame.index.tolist(), list(range(len(frame))))
+
 
 class CandleCacheTest(FixtureCase):
     def _ticks_built(self):

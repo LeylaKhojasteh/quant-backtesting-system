@@ -853,13 +853,18 @@ def load_ticks_frame(
     start: str | None = None,
     end: str | None = None,
     root: str | Path = DEFAULT_CACHE_ROOT,
+    columns: list[str] | None = None,
 ) -> pd.DataFrame:
     """Load the canonical tick frame for an inclusive calendar-date ``[start, end]``.
 
     Internally the range is half-open ``[start 00:00, next-day(end) 00:00)``.
-    Opens only overlapping monthly partitions and returns timestamp,bid,ask,
-    bid_volume,ask_volume — identical to the verified CSV parse.
+    Opens only overlapping monthly partitions and returns canonical columns
+    (default: timestamp,bid,ask,bid_volume,ask_volume) — identical to the
+    verified CSV parse. ``columns`` projects a smaller execution frame when the
+    caller does not need every column (the Parquet store stays complete).
     """
+    out_cols = list(columns) if columns else ["timestamp", "bid", "ask", "bid_volume", "ask_volume"]
+    read_cols = list(dict.fromkeys(out_cols + ["timestamp", "source_row"]))
     ds = _resolve_dataset(source, symbol=symbol, root=root)
     start_ts, end_exclusive = resolve_range(start, end)
     months = _months_between(start_ts, end_exclusive, ds.get("months", []))
@@ -868,23 +873,54 @@ def load_ticks_frame(
             f"requested range {start}..{end} is outside cached coverage "
             f"{ds.get('coverage_start')}..{ds.get('coverage_end')}"
         )
-    frames = []
+    # Preallocate one contiguous frame (bounded peak) instead of N frames + concat
+    # or Arrow-table concatenation, both of which hold multiple full-year copies.
+    parts = []
+    total = 0
     for label in months:
         year, month = (int(x) for x in label.split("-"))
         pid = PartitionId(ds["provider"], ds["symbol"], year, month)
         parquet = partition_parquet(root, pid)
         if not parquet.is_file():
             raise PartitionMissingError(f"required partition missing: {pid.label}")
-        frames.append(pq.read_table(parquet, columns=list(READ_COLUMNS)).to_pandas())
-    frame = pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
-    if start_ts is not None:
-        frame = frame[frame["timestamp"] >= start_ts]
-    if end_exclusive is not None:
-        frame = frame[frame["timestamp"] < end_exclusive]
-    frame = frame.sort_values(["timestamp", "source_row"], kind="stable").reset_index(drop=True)
+        n = int(pq.ParquetFile(parquet).metadata.num_rows)
+        parts.append((parquet, n))
+        total += n
+    if total == 0:
+        raise CoverageError(f"no cached ticks in {source} for {start}..{end}")
+    arrays = {c: np.empty(total, dtype="int64" if c in ("timestamp", "source_row") else "float64")
+              for c in read_cols}
+    pos = 0
+    for parquet, _n in parts:
+        pf = pq.ParquetFile(parquet)
+        for batch in pf.iter_batches(batch_size=1_000_000, columns=read_cols):
+            bn = batch.num_rows
+            for c in read_cols:
+                col = batch.column(c)
+                arrays[c][pos:pos + bn] = (col.cast(pa.int64()).to_numpy()
+                                           if c in ("timestamp", "source_row") else col.to_numpy())
+            pos += bn
+    frame = pd.DataFrame({c: arrays[c] for c in read_cols if c != "timestamp"}, copy=False)
+    frame.insert(0, "timestamp", pd.to_datetime(arrays["timestamp"], utc=True))
+    # Skip filter copies when the requested range already covers the loaded data.
+    if len(frame):
+        need_start = start_ts is not None and start_ts > frame["timestamp"].iloc[0]
+        need_end = end_exclusive is not None and end_exclusive <= frame["timestamp"].iloc[-1]
+        if need_start:
+            frame = frame[frame["timestamp"] >= start_ts]
+        if need_end:
+            frame = frame[frame["timestamp"] < end_exclusive]
     if frame.empty:
         raise CoverageError(f"no cached ticks in {source} for {start}..{end}")
-    return frame[["timestamp", "bid", "ask", "bid_volume", "ask_volume"]]
+    # Partitions are concatenated in chronological month order and each partition
+    # is already ordered, so sorting is only needed if timestamps are not monotone.
+    if not frame["timestamp"].is_monotonic_increasing:
+        frame = frame.sort_values(["timestamp", "source_row"], kind="stable")
+    if "source_row" in frame.columns:
+        frame.drop(columns=["source_row"], inplace=True)
+    if not frame.index.equals(pd.RangeIndex(len(frame))):
+        frame.reset_index(drop=True, inplace=True)
+    return frame
 
 
 # Back-compat alias used by the run boundary.

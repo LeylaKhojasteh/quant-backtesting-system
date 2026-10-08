@@ -210,20 +210,30 @@ def execute_run(
             ticks = data_engine.load_ticks_frame(
                 data_source, symbol=request.market.symbol,
                 start=request.market.start, end=request.market.end,
+                # Execution only needs timestamp + BID/ASK (the canonical store
+                # keeps volumes/source_row; the hot frame does not carry them).
+                columns=["timestamp", "bid", "ask"],
             )
         elif data_path.is_file():
             ticks = _load_ticks(data_path)
         else:
             raise run_errors.InvalidDatasetError(f"dataset not found: {data_path}")
-        if getattr(ticks["timestamp"].dt, "tz", None) is None:
-            ticks["timestamp"] = ticks["timestamp"].dt.tz_localize("UTC")
+        if cache_run:
+            # The Data Engine reader already returns canonical ticks: UTC tz-aware,
+            # filtered to the requested range, and chronologically ordered. Avoid
+            # redundant full-frame copies (tz convert / range filter / sort).
+            if getattr(ticks["timestamp"].dt, "tz", None) is None:
+                ticks["timestamp"] = ticks["timestamp"].dt.tz_localize("UTC")
         else:
-            ticks["timestamp"] = ticks["timestamp"].dt.tz_convert("UTC")
-        if request.market.start:
-            ticks = ticks[ticks["timestamp"] >= pd.Timestamp(request.market.start, tz="UTC")]
-        if request.market.end:
-            ticks = ticks[ticks["timestamp"] < pd.Timestamp(request.market.end, tz="UTC") + pd.Timedelta(days=1)]
-        ticks = ticks.sort_values("timestamp", kind="stable").reset_index(drop=True)
+            if getattr(ticks["timestamp"].dt, "tz", None) is None:
+                ticks["timestamp"] = ticks["timestamp"].dt.tz_localize("UTC")
+            else:
+                ticks["timestamp"] = ticks["timestamp"].dt.tz_convert("UTC")
+            if request.market.start:
+                ticks = ticks[ticks["timestamp"] >= pd.Timestamp(request.market.start, tz="UTC")]
+            if request.market.end:
+                ticks = ticks[ticks["timestamp"] < pd.Timestamp(request.market.end, tz="UTC") + pd.Timedelta(days=1)]
+            ticks = ticks.sort_values("timestamp", kind="stable").reset_index(drop=True)
         if ticks.empty:
             raise run_errors.InvalidDatasetError(
                 f"no ticks in {data_source} for the requested range"
