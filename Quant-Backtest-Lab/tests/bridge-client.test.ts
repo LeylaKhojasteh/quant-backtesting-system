@@ -6,8 +6,10 @@ import {
   compareRuns,
   deleteRun,
   deleteStrategy,
+  getActiveRunJob,
   getHealth,
   getRun,
+  getRunJob,
   getStudy,
   importStrategy,
   listDatasets,
@@ -15,8 +17,11 @@ import {
   listStrategies,
   listStudies,
   publishRun,
+  runJobErrorText,
   runReportUrl,
   startOptimization,
+  startRunJob,
+  stopRunJob,
   submitRun,
   type BacktestRunRequestPayload,
 } from '../app/bridge-client.js';
@@ -263,6 +268,51 @@ describe('bridge-client.ts - local bridge HTTP boundary', () => {
     assert.equal(reloaded.study_id, 'study_abc');
     assert.ok(calls.some((c) => c.startsWith('POST') && c.includes('/optimizations')));
     assert.ok(calls.some((c) => c.includes('/optimizations/study_abc')));
+  });
+
+  test('run jobs: start / poll / active / stop / error text', async () => {
+    const calls: string[] = [];
+    const job = {
+      job_id: 'job_abc', state: 'running', stage: 'executing_engine', stage_label: 'Engine execution',
+      run_id: null, pid: 123, created_at: '2025-01-02T00:00:00Z', started_at: '2025-01-02T00:00:01Z',
+      finished_at: null, elapsed_seconds: 12.5, heartbeat_at: '2025-01-02T00:00:13Z',
+      heartbeat_age_seconds: 0.4, heartbeat: 'alive', exit_code: null, error: null, events: [],
+    };
+    const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+      const u = String(url);
+      calls.push(`${init?.method ?? 'GET'} ${u}`);
+      if (u.endsWith('/run-jobs') && (init?.method ?? 'GET') === 'POST') return jsonResponse({ job });
+      if (u.endsWith('/run-jobs/active')) return jsonResponse({ job });
+      if (u.endsWith('/stop')) return jsonResponse({ job: { ...job, state: 'stopped' } });
+      return jsonResponse({ job });
+    }) as unknown as typeof fetch;
+    const payload: BacktestRunRequestPayload = {
+      strategy: { selector: 'candle_direction', parameters: {} },
+      market: { symbol: 'XAUUSD', data_source: 'ticks.csv' },
+    };
+    assert.equal((await startRunJob(payload, fetchImpl)).job_id, 'job_abc');
+    assert.equal((await getRunJob('job_abc', fetchImpl)).stage, 'executing_engine');
+    assert.equal((await getActiveRunJob(fetchImpl))?.heartbeat, 'alive');
+    assert.equal((await stopRunJob('job_abc', fetchImpl)).state, 'stopped');
+    assert.equal(runJobErrorText({ code: 'backtest_failed', message: 'bad ticks' }), 'bad ticks');
+    assert.equal(runJobErrorText(null), null);
+    assert.ok(calls.some((c) => c.startsWith('POST') && c.endsWith('/run-jobs')));
+    assert.ok(calls.some((c) => c.includes('/run-jobs/active')));
+    assert.ok(calls.some((c) => c.includes('/run-jobs/job_abc/stop')));
+  });
+
+  test('duplicate job start surfaces the 409 conflict code', async () => {
+    const fetchImpl = (async () =>
+      jsonResponse({ error: { code: 'run_in_progress', message: 'a real backtest is already running' } }, 409)) as unknown as typeof fetch;
+    await assert.rejects(
+      () => startRunJob({ strategy: { selector: 'x' }, market: { symbol: 'XAUUSD', data_source: 'd.csv' } }, fetchImpl),
+      (err: unknown) => {
+        assert.ok(err instanceof BridgeError);
+        assert.equal((err as BridgeError).code, 'run_in_progress');
+        assert.equal((err as BridgeError).status, 409);
+        return true;
+      },
+    );
   });
 
   test('structured bridge errors surface code and status', async () => {

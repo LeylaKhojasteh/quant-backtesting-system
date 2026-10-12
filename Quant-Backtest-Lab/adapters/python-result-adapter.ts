@@ -14,7 +14,7 @@
 import { BacktestRunSchema, type BacktestRun } from '../app/schema';
 import { mapPythonResultToBacktestRun, validatePythonResult, type PythonResult } from '../app/python-result';
 
-export type ArchivedRunRef = { runId: string; file: string; label: string; description?: string };
+export type ArchivedRunRef = { runId: string; file: string; label: string; description?: string; createdAt?: string };
 
 export type ArchivedRunResult = { ok: true; run: BacktestRun } | { ok: false; error: string };
 
@@ -39,13 +39,28 @@ export function resolveRunFile(file: string): string {
   return `/${file}`;
 }
 
-/** Known archived runs, from the co-located manifest. */
+/**
+ * Known archived runs, from the co-located manifest.
+ * The bridge publishes newest-first (createdAt desc); the contract is
+ * positional — head is newest — with a createdAt-desc fallback for manifests
+ * that predate the ordering guarantee.
+ */
 export async function listArchivedRuns(fetchImpl: typeof fetch = fetch): Promise<ArchivedRunRef[]> {
   const res = await fetchImpl(MANIFEST_URL);
   if (!res.ok) throw new Error(`run manifest unavailable (HTTP ${res.status})`);
   const manifest = (await res.json()) as { runs?: ArchivedRunRef[] };
   if (!Array.isArray(manifest.runs)) throw new Error('run manifest has no runs array');
-  return manifest.runs;
+  const runs = [...manifest.runs];
+  const anyDated = runs.some((r) => typeof r.createdAt === 'string' && r.createdAt.length > 0);
+  if (anyDated) {
+    const dated = runs.filter((r) => typeof r.createdAt === 'string' && (r.createdAt as string).length > 0);
+    const undated = runs.filter((r) => !(typeof r.createdAt === 'string' && (r.createdAt as string).length > 0));
+    dated.sort((a, b) => String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? ''))
+      || a.runId.localeCompare(b.runId));
+    undated.sort((a, b) => a.runId.localeCompare(b.runId));
+    return [...dated, ...undated];
+  }
+  return runs;
 }
 
 function fileForRun(runs: ArchivedRunRef[], runId: string): string | null {

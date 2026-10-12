@@ -18,11 +18,14 @@ export type ReadinessItem = {
 };
 
 /**
- * Derives the five readiness steps from a BacktestRun.
+ * Derives the four readiness steps from a BacktestRun.
  * The demo run (dataMode seeded-demo, dataQuality demo, accountReady false)
  * never yields a `ready` tone and never uses the word `Verified`.
  * A future live run (dataMode live, dataQuality measured, accountReady true)
  * yields `ready` for the steps it satisfies.
+ *
+ * Price-term runs report `Account: Off` (neutral) with a Validated run
+ * result — a missing Account Model never implies unreliability.
  */
 export function readinessItems(run: BacktestRun | null | undefined): ReadinessItem[] {
   if (!run) {
@@ -36,10 +39,9 @@ export function readinessItems(run: BacktestRun | null | undefined): ReadinessIt
     });
     return [
       loading('source', 'Data source'),
-      loading('validation', 'Data validation'),
-      loading('engine', 'Engine connection'),
-      loading('account', 'Account model'),
-      loading('reliability', 'Result reliability'),
+      loading('validation', 'Validation'),
+      loading('engine', 'Run result'),
+      loading('account', 'Account'),
     ];
   }
 
@@ -110,51 +112,34 @@ export function readinessItems(run: BacktestRun | null | undefined): ReadinessIt
         readyHint: 'Run a real backtest to produce a validated result.',
       };
 
+  // A missing Account Model never makes a price-term run unreliable: price
+  // terms are the validated result. "Off" is a neutral mode, not a warning.
   const account: ReadinessItem = accountReady
     ? {
         key: 'account',
-        label: 'Account model',
-        status: `Ready${run.account.currency ? ` · ${run.account.currency}` : ''}`,
+        label: 'Account',
+        status: 'Ready',
         tone: 'ready',
-        detail: 'Account currency, sizing and cost model configured.',
+        detail: `Account model applied${run.account.currency ? ` · ${run.account.currency}` : ''}.`,
         readyHint: 'Account model is configured.',
-      }
-    : {
-        key: 'account',
-        label: 'Account model',
-        status: 'Not available',
-        tone: 'unavailable',
-        detail: run.account.note ?? 'No account-currency model configured.',
-        readyHint: 'Configure account currency, lot sizing, contract size, commission, swap and slippage.',
-      };
-
-  const reliable = isLive && measured && accountReady;
-  const reliability: ReadinessItem = reliable
-    ? {
-        key: 'reliability',
-        label: 'Result reliability',
-        status: 'Ready for review',
-        tone: 'ready',
-        detail: 'Live data, measured quality and account model present.',
-        readyHint: 'All readiness steps are satisfied.',
       }
     : isLive
       ? {
-          key: 'reliability',
-          label: 'Result reliability',
-          status: 'Account model missing',
-          tone: 'pending',
-          detail: 'Backtested data with measured validation, but no account model — account-currency metrics stay unavailable.',
-          readyHint: 'Configure account currency, lot sizing, contract size, commission, swap and slippage to complete result reliability.',
+          key: 'account',
+          label: 'Account',
+          status: 'Off',
+          tone: 'unavailable',
+          detail: 'Price-term results are available. Enable Account Model for account-currency PnL, balance and return.',
+          readyHint: 'Price-term results are available. Enable Account Model for account-currency PnL, balance and return.',
         }
       : {
-          key: 'reliability',
-          label: 'Result reliability',
-          status: 'Not a real run',
-          tone: 'pending',
-          detail: 'Seeded demo fixture — not a live or backtested-with-data result.',
-          readyHint: 'Requires a real archived run with a configured account model.',
+          key: 'account',
+          label: 'Account',
+          status: 'Not available',
+          tone: 'unavailable',
+          detail: run.account.note ?? 'No account-currency model configured.',
+          readyHint: 'Run a real backtest to produce a validated result.',
         };
 
-  return [source, validation, engine, account, reliability];
+  return [source, validation, engine, account];
 }

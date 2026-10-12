@@ -10,7 +10,7 @@ describe('readiness.ts - DataReadiness derivation', () => {
     assert.ok(result.ok);
     if (!result.ok) return;
     const items = readinessItems(result.run);
-    assert.equal(items.length, 5);
+    assert.equal(items.length, 4);
     for (const item of items) {
       assert.ok(!/verified/i.test(item.status), `${item.label} must not say Verified`);
       assert.notEqual(item.tone, 'ready', `${item.label} must not be ready-green in demo`);
@@ -20,7 +20,6 @@ describe('readiness.ts - DataReadiness derivation', () => {
     assert.equal(byKey.validation.status, 'Not measured');
     assert.equal(byKey.engine.status, 'Not available');
     assert.equal(byKey.account.status, 'Not available');
-    assert.equal(byKey.reliability.status, 'Not a real run');
   });
 
   test('every readiness item carries a ready-hint for tooltips', async () => {
@@ -47,9 +46,30 @@ describe('readiness.ts - DataReadiness derivation', () => {
     const byKey = Object.fromEntries(items.map((i) => [i.key, i]));
     assert.equal(byKey.validation.tone, 'ready');
     assert.equal(byKey.account.tone, 'ready');
+    assert.equal(byKey.account.status, 'Ready');
+    assert.equal(byKey.engine.status, 'Validated');
     assert.equal(byKey.engine.tone, 'ready');
     assert.equal(byKey.source.tone, 'ready');
-    assert.equal(byKey.reliability.tone, 'ready');
+  });
+
+  test('live price-term run without account model stays validated, Account Off', async () => {
+    const result = await loadBacktestRun();
+    assert.ok(result.ok);
+    if (!result.ok) return;
+    const live = {
+      ...result.run,
+      dataMode: 'live' as const,
+      dataQuality: { ...result.run.dataQuality, status: 'measured' as const },
+      account: { ...result.run.account, accountReady: false },
+    };
+    const items = readinessItems(live);
+    const byKey = Object.fromEntries(items.map((i) => [i.key, i]));
+    assert.equal(byKey.engine.status, 'Validated');
+    assert.equal(byKey.engine.tone, 'ready');
+    assert.equal(byKey.account.status, 'Off');
+    assert.match(byKey.account.detail, /Price-term results are available/);
+    assert.ok(!items.some((i) => i.key === 'reliability'), 'no Result reliability item');
+    assert.ok(!items.some((i) => /Account model missing/.test(i.status)));
   });
 });
 

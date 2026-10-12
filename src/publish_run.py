@@ -80,6 +80,12 @@ def _manifest_entry(payload: dict) -> dict:
     )
     return {
         "runId": run_id,
+        # ISO-8601 publication time: newest-first ordering for "latest run".
+        # Optional for older entries (treated as oldest); never fabricated
+        # anywhere else — the adapter falls back to directory mtime.
+        "createdAt": str(payload.get("created_at")
+                         or (payload.get("execution") or {}).get("finished_at")
+                         or payload.get("run_timestamp_utc") or ""),
         "file": f"runs/{run_id}/result.json",
         "label": label,
         "description": description,
@@ -141,7 +147,14 @@ def publish_run(
         entries.append(entry)
     else:
         entries[existing] = entry
-    data["runs"] = sorted(entries, key=lambda r: str(r.get("runId", "")))
+    # Newest publication first (createdAt desc, runId asc for ties) so the
+    # frontend's "latest successful run" is the manifest head. Entries
+    # without createdAt (legacy) sort last by runId.
+    dated = [r for r in entries if str(r.get("createdAt") or "")]
+    undated = [r for r in entries if not str(r.get("createdAt") or "")]
+    dated.sort(key=lambda r: (str(r.get("createdAt")), str(r.get("runId"))), reverse=True)
+    undated.sort(key=lambda r: str(r.get("runId")))
+    data["runs"] = dated + undated
 
     new_text = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
     old_text = manifest_path.read_text(encoding="utf-8") if manifest_path.is_file() else None

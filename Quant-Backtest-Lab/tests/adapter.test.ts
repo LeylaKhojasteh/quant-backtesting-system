@@ -10,7 +10,7 @@ import {
   type PythonResult,
 } from '../app/python-result.js';
 import { BacktestRunSchema } from '../app/schema.js';
-import { loadArchivedRun, resolveRunFile } from '../adapters/python-result-adapter.js';
+import { listArchivedRuns, loadArchivedRun, resolveRunFile } from '../adapters/python-result-adapter.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const labRoot = join(here, '..');
@@ -114,6 +114,80 @@ describe('python-result-adapter.ts - archive boundary', () => {
     if (!result.ok) return;
     assert.equal(result.run.dataMode, 'live');
     assert.equal(result.run.trades.length, 7);
+  });
+
+  test('listArchivedRuns keeps newest-first manifest order (createdAt desc)', async () => {
+    const manifestFetch = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        runs: [
+          { runId: 'run_0001', file: 'runs/run_0001/result.json', label: 'old' },
+          { runId: 'run_b', file: 'runs/run_b/result.json', label: 'new', createdAt: '2026-10-12T00:00:02Z' },
+          { runId: 'run_a', file: 'runs/run_a/result.json', label: 'newer', createdAt: '2026-10-12T00:00:01Z' },
+        ],
+      }),
+    })) as unknown as typeof fetch;
+    const runs = await listArchivedRuns(manifestFetch);
+    assert.deepEqual(runs.map((r) => r.runId), ['run_b', 'run_a', 'run_0001']);
+  });
+
+  test('boot selection: manifest head wins over any stale stored run id', async () => {
+    // Regression for the v1.0.1 startup contract:
+    //   1. active job  2. newest successful valid run  3. empty.
+    // localStorage is never authoritative: with run_old persisted, run_new
+    // (manifest head) must still be selected.
+    const manifestFetch = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        runs: [
+          { runId: 'run_new', file: 'runs/run_new/result.json', label: 'new', createdAt: '2026-10-12T00:00:02Z' },
+          { runId: 'run_old', file: 'runs/run_old/result.json', label: 'old', createdAt: '2026-10-12T00:00:01Z' },
+          { runId: 'run_0001', file: 'runs/run_0001/result.json', label: 'baseline' },
+        ],
+      }),
+    })) as unknown as typeof fetch;
+    const runs = await listArchivedRuns(manifestFetch);
+    const storedId = 'run_old'; // stale persisted selection
+    // Mirrors the boot selector in app/run-context.tsx: head wins, storage
+    // is not consulted.
+    const pick = runs.length ? runs[0].runId : null;
+    assert.equal(pick, 'run_new');
+    assert.notEqual(pick, storedId);
+    assert.ok(!runs.some((r) => /stopped|failed|incomplete/i.test(r.runId)),
+      'stopped/failed/incomplete jobs never enter the manifest list');
+  });
+
+  test('boot selection: deleted newest falls back to next valid run', async () => {
+    const manifestFetch = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        runs: [
+          { runId: 'run_old', file: 'runs/run_old/result.json', label: 'old', createdAt: '2026-10-12T00:00:01Z' },
+          { runId: 'run_0001', file: 'runs/run_0001/result.json', label: 'baseline' },
+        ],
+      }),
+    })) as unknown as typeof fetch;
+    const runs = await listArchivedRuns(manifestFetch);
+    const pick = runs.length ? runs[0].runId : null;
+    assert.equal(pick, 'run_old');
+  });
+
+  test('boot selector never reads the legacy stored-run key', () => {
+    const src = readFileSync(join(labRoot, 'app', 'run-context.tsx'), 'utf-8');
+    assert.ok(!src.includes('qbl:lastRunId'), 'legacy authoritative key must be gone');
+    // The boot effect (up to its dependency close) must not consult storage;
+    // the later hint-writer effect may persist a non-authoritative view hint.
+    const bootStart = src.indexOf('const booted = useRef(false)');
+    const bootEnd = src.indexOf('}, [refreshArchived])');
+    assert.ok(bootStart >= 0 && bootEnd > bootStart, 'boot effect must exist');
+    const bootBlock = src.slice(bootStart, bootEnd);
+    assert.ok(!/localStorage\s*\.\s*(getItem|setItem|removeItem)/.test(bootBlock),
+      'boot pick must not consult localStorage');
+    assert.ok(bootBlock.includes('const pick = runs.length'),
+      'boot selects the manifest head');
   });
 
   test('unknown runs and missing files return errors, never throw', async () => {

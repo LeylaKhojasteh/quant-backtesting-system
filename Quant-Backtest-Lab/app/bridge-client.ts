@@ -247,6 +247,88 @@ export async function submitRun(
   );
 }
 
+/* ------------------------------------------------------------------ */
+/* v1.0.1 async run jobs: one active worker process, polled at ~1 Hz.  */
+/* ------------------------------------------------------------------ */
+
+export type RunJobState =
+  | 'queued' | 'running' | 'stopping' | 'stopped' | 'completed' | 'failed';
+
+export interface RunJobEvent {
+  t: string;
+  stage: string;
+  event: string;
+}
+
+export interface RunJob {
+  job_id: string;
+  state: RunJobState;
+  stage: string;
+  stage_label: string;
+  run_id: string | null;
+  pid: number | null;
+  created_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  elapsed_seconds: number | null;
+  heartbeat_at: string | null;
+  heartbeat_age_seconds: number | null;
+  /** alive | delayed | stale | starting | completed | failed | stopped */
+  heartbeat: string;
+  exit_code: number | null;
+  error: { code: string; message: string } | string | null;
+  events: RunJobEvent[];
+}
+
+/** Start one real backtest in a worker process. 409 when one is active. */
+export async function startRunJob(
+  payload: BacktestRunRequestPayload,
+  fetchImpl?: typeof fetch,
+): Promise<RunJob> {
+  const data = await requestJson<{ job: RunJob }>(
+    '/run-jobs',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+    fetchImpl,
+  );
+  return data.job;
+}
+
+export async function getRunJob(
+  jobId: string,
+  fetchImpl?: typeof fetch,
+): Promise<RunJob> {
+  const data = await requestJson<{ job: RunJob }>(`/run-jobs/${enc(jobId)}`, undefined, fetchImpl);
+  return data.job;
+}
+
+/** The single active job, or null when idle. Reconnect target after reload. */
+export async function getActiveRunJob(fetchImpl?: typeof fetch): Promise<RunJob | null> {
+  const data = await requestJson<{ job: RunJob | null }>('/run-jobs/active', undefined, fetchImpl);
+  return data.job ?? null;
+}
+
+export async function stopRunJob(
+  jobId: string,
+  fetchImpl?: typeof fetch,
+): Promise<RunJob> {
+  const data = await requestJson<{ job: RunJob }>(
+    `/run-jobs/${enc(jobId)}/stop`,
+    { method: 'POST' },
+    fetchImpl,
+  );
+  return data.job;
+}
+
+export function runJobErrorText(error: RunJob['error']): string | null {
+  if (!error) return null;
+  if (typeof error === 'string') return error;
+  return error.message || error.code || 'run failed';
+}
+
 export interface ImportStrategyPayload {
   filename: string;
   source: string;

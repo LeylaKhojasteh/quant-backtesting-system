@@ -180,3 +180,17 @@ class DataNotPreparedError(RunError):
 
     code = "data_not_prepared"
     http_status = 400
+
+
+class RunConflictError(RunError):
+    """A real backtest job is already active; only one may run at a time."""
+
+    code = "run_in_progress"
+    http_status = 409
+
+
+class RunJobNotFoundError(RunError):
+    """Unknown run-job id."""
+
+    code = "job_not_found"
+    http_status = 404

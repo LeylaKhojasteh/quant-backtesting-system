@@ -732,9 +732,9 @@ export function Equity({ mode }: { mode: string }) {
   if (!run) {
     return (
       <div className="equity">
-        <svg ref={ref} role="img" aria-label="Equity chart loading"></svg>
+        <svg ref={ref} role="img" aria-label="Performance chart loading"></svg>
         <div className="equity-empty">
-          <h3>Equity Chart</h3>
+          <h3>Cumulative Trade PnL</h3>
           <p>{state.status === 'loading' ? 'Loading reference run…' : state.status === 'error' ? state.error : state.status === 'malformed' ? state.message : 'Unknown state'}</p>
         </div>
       </div>

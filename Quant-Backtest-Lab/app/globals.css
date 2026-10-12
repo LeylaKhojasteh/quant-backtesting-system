@@ -811,5 +811,25 @@
 .real-run .run{margin-bottom:2px}
 .real-run .config-note{margin-top:7px}
 
+/* ==========================================================================
+   v1.0.1 — live run activity bar (stage + elapsed + worker heartbeat)
+   Compact single strip; details expand inline. No progress bars by design.
+   ========================================================================== */
+.run-activity{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-md);padding:8px 12px;margin-bottom:9px;font-size:12px}
+.run-activity:empty{display:none}
+.activity-dot{width:8px;height:8px;border-radius:50%;background:var(--success);flex-shrink:0;animation:pulse-dot 1.6s ease-in-out infinite}
+.activity-dot.stale{background:var(--warning)}
+@keyframes pulse-dot{0%,100%{opacity:1}50%{opacity:.35}}
+.activity-main b{font-weight:600}
+.activity-main .meta{color:var(--muted-foreground)}
+.activity-heartbeat{margin-left:auto;font-size:11px;color:var(--success);white-space:nowrap}
+.activity-heartbeat.stale{color:var(--warning)}
+.activity-details,.activity-stop{padding:4px 9px;font-size:11px}
+.activity-stop{color:var(--danger)}
+.activity-stop:hover{background:#ee757b14}
+.activity-events{list-style:none;margin:2px 0 0;padding:8px 0 0;border-top:1px solid var(--hairline);flex-basis:100%;display:flex;flex-direction:column;gap:3px;max-height:180px;overflow:auto}
+.activity-events li{font-size:11px;display:flex;gap:8px}
+.activity-events .meta{font-variant-numeric:tabular-nums}
+
 
 

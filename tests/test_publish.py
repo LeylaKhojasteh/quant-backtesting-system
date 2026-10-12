@@ -85,9 +85,23 @@ class PublishRunTest(unittest.TestCase):
         )
         pub.publish_run("run_0001", runs=self.runs, public=self.public)
         ids = [r["runId"] for r in self._manifest()["runs"]]
-        self.assertEqual(ids, ["run_0000", "run_0001"])
+        # v1.0.1: newest publication first (run_0001 carries created_at; the
+        # legacy run_0000 entry has none and sorts last).
+        self.assertEqual(ids, ["run_0001", "run_0000"])
         entry = next(r for r in self._manifest()["runs"] if r["runId"] == "run_0001")
         self.assertNotEqual(entry["label"], "stale")
+        self.assertTrue(entry.get("createdAt"))
+
+    def test_manifest_orders_newest_first(self):
+        pub.publish_run("run_0001", runs=self.runs, public=self.public)
+        (self.runs / "run_0002").mkdir(parents=True, exist_ok=True)
+        payload = json.loads((self.runs / "run_0001" / "result.json").read_text(encoding="utf-8"))
+        payload["run_id"] = "run_0002"
+        payload["created_at"] = "2099-01-01T00:00:00Z"
+        (self.runs / "run_0002" / "result.json").write_text(json.dumps(payload), encoding="utf-8")
+        pub.publish_run("run_0002", runs=self.runs, public=self.public)
+        ids = [r["runId"] for r in self._manifest()["runs"]]
+        self.assertEqual(ids, ["run_0002", "run_0001"])
 
     def test_invalid_run_is_not_published(self):
         (self.runs / "run_0001" / "result.json").write_text(

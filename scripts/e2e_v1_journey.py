@@ -37,8 +37,8 @@ SET_INPUT_JS = """(([sel, value]) => { const el=document.querySelector(sel); if(
 CLICK_EL_JS = """((sel) => { const el=document.querySelector(sel); if(!el) return 'NO'; for (const t of ['pointerdown','mousedown','mouseup','click']) el.dispatchEvent(new MouseEvent(t,{bubbles:true,cancelable:true,view:window})); return 'OK'; })"""
 CLICK_ARIA_JS = """((label) => { const el=document.querySelector('[aria-label="'+label.replace(/"/g,'\\\\"')+'"]'); if(!el) return 'NO'; for (const t of ['pointerdown','mousedown','mouseup','click']) el.dispatchEvent(new MouseEvent(t,{bubbles:true,cancelable:true,view:window})); return 'OK'; })"""
 CLICK_TEXT_JS = """(([root,text]) => { const el=[...document.querySelectorAll(root)].find(b=>b.textContent.trim()===text||b.textContent.includes(text)); if(!el) return 'NO'; for (const t of ['pointerdown','mousedown','mouseup','click']) el.dispatchEvent(new MouseEvent(t,{bubbles:true,cancelable:true,view:window})); return 'OK'; })"""
-CLICK_RUN_JS = """(() => { const b=[...document.querySelectorAll('.real-run button')].find(x=>x.textContent.includes('Run Backtest')||x.textContent.includes('Running')); if(!b) return 'NO'; b.click(); return 'CLICKED'; })()"""
-WAIT_ENABLED_JS = ("(() => new Promise(res => { const ok=()=>{const b=[...document.querySelectorAll('.real-run button')].find(x=>x.textContent.includes('Run Backtest'));return !!b && !b.disabled;};"
+CLICK_RUN_JS = """(() => { const b=[...document.querySelectorAll('.real-run button.primary')].find(x=>x.textContent.includes('Run Backtest')||x.textContent.includes('Backtest running')); if(!b) return 'NO'; b.click(); return 'CLICKED'; })()"""
+WAIT_ENABLED_JS = ("(() => new Promise(res => { const ok=()=>{const b=[...document.querySelectorAll('.real-run button.primary')].find(x=>x.textContent.includes('Run Backtest'));return !!b && !b.disabled;};"
                    " if(ok())return res(true);" + _POLL.replace("MAX", "40000") + "}))()")
 WAIT_NEW_RUN_JS = ("(prev => new Promise(res => { const ok=()=>{const t=(document.querySelector('.run-status')||{}).textContent||'';"
                    " const m=t.match(/Archived Run · (\\S+) ·/); return !!m && m[1]!==prev;};"
@@ -105,7 +105,7 @@ def main() -> int:
         cdp.call("Emulation.setDeviceMetricsOverride", {"width": 1440, "height": 900, "deviceScaleFactor": 1, "mobile": False})
         time.sleep(0.8)
 
-        ok &= check("version v1.0.0 shown", "v1.0.0" in (cdp.evaluate(f"({TEXT_JS})('.engine')") or ""))
+        ok &= check("version v1.0.1 shown", "v1.0.1" in (cdp.evaluate(f"({TEXT_JS})('.engine')") or ""))
         ok &= check("logical dataset shown", "XAUUSD · Dukascopy" in (cdp.evaluate(f"({TEXT_JS})('[aria-label=\"Real run dataset\"]')") or ""))
         ok &= check("symbol derived XAUUSD", (cdp.evaluate(f"({TEXT_JS})('[aria-label=\"Run symbol\"]')") or "").strip() == "XAUUSD")
         ok &= check("timeframe controlled", cdp.evaluate("!!document.querySelector('button[aria-label=\"Run timeframe\"]')"))

@@ -169,9 +169,33 @@ test('DEMO badge exists in page.tsx', () => {
     assert.ok(logic.includes('Seeded demo'));
     assert.ok(logic.includes('Not measured'));
     assert.ok(logic.includes('Not available'));
-    assert.ok(logic.includes('Not a real run'));
+    assert.ok(!logic.includes('Result reliability'), 'reliability row must be removed');
     const page = allFiles.get(path.join(appDir, 'page.tsx')) || '';
     assert.ok(page.includes('<DataReadinessBar'));
+  });
+
+  test('Equity panel uses price-term / realized-balance titles', () => {
+    const page = allFiles.get(path.join(appDir, 'page.tsx')) || '';
+    assert.ok(page.includes('Cumulative Trade PnL'));
+    assert.ok(page.includes('Realized Account Balance'));
+    assert.ok(!page.includes('title="Equity Curve"'), 'Equity Curve title must be gone');
+    const charts = allFiles.get(path.join(appDir, 'charts.tsx')) || '';
+    assert.ok(charts.includes('Realized Account Balance'));
+  });
+
+  test('Live activity bar polls jobs without fake progress', () => {
+    const bar = allFiles.get(path.join(appDir, 'run-activity-bar.tsx')) || '';
+    assert.ok(bar.includes('Backtest running'));
+    assert.ok(bar.includes('heartbeat'));
+    // No rendered progress affordances: no width-driven bars, no ETA text.
+    assert.ok(!bar.includes('progress-bar') && !bar.includes('progress_fill'));
+    assert.ok(!/\bETA\b/i.test(bar), 'no fake ETA in the activity bar');
+    assert.ok(!/estimated\s+time/i.test(bar), 'no fake time estimate in the activity bar');
+    const ctx = allFiles.get(path.join(appDir, 'run-job-context.tsx')) || '';
+    assert.ok(ctx.includes('/run-jobs/active'), 'reload reconnects to the active job');
+    assert.ok(ctx.includes('1000'), 'polls at ~1 Hz');
+    const panel = allFiles.get(path.join(appDir, 'real-run-panel.tsx')) || '';
+    assert.ok(panel.includes('startJob') || panel.includes('startRunJob'), 'form starts async jobs');
   });
 
   test('Demo replay is fixture-gated, not a product UI mode', () => {

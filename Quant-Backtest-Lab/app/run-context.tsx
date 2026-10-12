@@ -2,6 +2,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { BacktestRunSchema, type BacktestRun } from './schema';
 import { loadBacktestRun } from './runner';
+import { getActiveRunJob } from './bridge-client';
 import { listArchivedRuns, loadArchivedRun, type ArchivedRunRef } from '../adapters/python-result-adapter';
 
 export type RunSource = { mode: 'none' } | { mode: 'demo' } | { mode: 'archived'; runId: string };
@@ -61,7 +62,17 @@ export function RunProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // Boot: choose the first real run (archived) or the explicit test fixture.
+  // Boot priority (authoritative, newest-first):
+  //   1. explicit test fixture (?fixture=demo)
+  //   2. active run job (reconnect handled by the job provider; the visible
+  //      result stays untouched until the new run successfully completes)
+  //   3. newest successfully completed valid run = manifest head
+  //      (listArchivedRuns is newest-first; deleted runs are already gone
+  //      from the list; stopped/failed/incomplete jobs never enter it)
+  //   4. neutral empty state.
+  // Persisted localStorage is NEVER authoritative for run selection: a stale
+  // stored run id must not override the newest successful run, and no fixed
+  // run_0001/demo baseline is ever restored.
   const booted = useRef(false);
   useEffect(() => {
     if (booted.current) return;
@@ -77,8 +88,23 @@ export function RunProvider({ children }: { children: ReactNode }) {
         setSource({ mode: 'demo' });
         return;
       }
-      if (runs.length) {
-        setSource({ mode: 'archived', runId: runs[0].runId });
+      // When a job is active, keep whatever result is currently loaded: the
+      // activity bar represents the NEW run and replacement happens only on
+      // successful completion. Do not touch the visible result here.
+      try {
+        const active = await getActiveRunJob();
+        if (!alive) return;
+        if (active) return;
+      } catch {
+        // Bridge unreachable at boot: fall through to archived runs.
+      }
+      // Newest successful real run first = manifest head. If the newest was
+      // deleted, the next newest valid run is already head. Stopped/failed/
+      // incomplete jobs never appear in the manifest, so they can never win.
+      // localStorage is intentionally NOT consulted here.
+      const pick = runs.length ? runs[0].runId : null;
+      if (pick) {
+        setSource({ mode: 'archived', runId: pick });
         return;
       }
       setState({ status: 'empty' });
@@ -87,6 +113,18 @@ export function RunProvider({ children }: { children: ReactNode }) {
       alive = false;
     };
   }, [refreshArchived]);
+
+  // Minor UI-state hint only (e.g. last viewed run for non-boot surfaces).
+  // It is NEVER read for boot selection: the manifest head is authoritative.
+  useEffect(() => {
+    if (source.mode === 'archived') {
+      try {
+        window.localStorage.setItem('qbl:lastViewedRunId', source.runId);
+      } catch {
+        // Storage unavailable (private mode): nothing depends on this.
+      }
+    }
+  }, [source]);
 
   useEffect(() => {
     if (source.mode === 'none') return;

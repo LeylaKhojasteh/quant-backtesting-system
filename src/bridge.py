@@ -12,6 +12,11 @@ Endpoints::
     GET  /strategies            -> trusted strategy catalog (metadata + parameters)
     GET  /datasets              -> approved local market-data catalog (metadata only)
     GET  /instruments           -> instrument economics catalog (contract size, quote currency)
+    GET  /run-jobs/active       -> the single active job, or {"job": null}
+    GET  /run-jobs/latest       -> newest valid archived run, or {"run": null}
+    GET  /run-jobs/<job_id>     -> one job (state + stage + heartbeat + events)
+    POST /run-jobs              -> start one real backtest in a worker process
+    POST /run-jobs/<job_id>/stop -> stop the worker; bridge and UI stay alive
     GET  /runs                  -> Run Library summaries (published + local)
     GET  /runs/<run_id>         -> run detail + archived configuration
     GET  /runs/<run_id>/report  -> the run's standalone report.html
@@ -58,7 +63,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src import config  # noqa: E402
 from src import run_errors  # noqa: E402
-from src import optimization, run_backtest, run_comparison, run_library, run_request  # noqa: E402
+from src import optimization, run_backtest, run_comparison, run_jobs, run_library, run_request  # noqa: E402
 from src import walk_forward  # noqa: E402
 from src import accounting  # noqa: E402
 from src import monte_carlo  # noqa: E402
@@ -326,6 +331,13 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 ))
             elif route == "/instruments":
                 self._send_json(200, {"instruments": accounting.instrument_catalog()})
+            elif route == "/run-jobs/active":
+                self._send_json(200, {"job": run_jobs.registry.active()})
+            elif route == "/run-jobs/latest":
+                self._send_json(200, {"run": run_jobs.latest_successful_run(
+                    self._config["runs"], self._config["public"])})
+            elif len(parts) == 2 and parts[0] == "run-jobs":
+                self._send_json(200, {"job": run_jobs.registry.poll(unquote(parts[1]))})
             elif route == "/runs":
                 self._send_json(200, {"runs": run_library.list_summaries(
                     self._config["runs"], self._config["public"])})
@@ -364,10 +376,25 @@ class BridgeHandler(BaseHTTPRequestHandler):
         route = self.path.split("?", 1)[0].rstrip("/") or "/"
         parts = [p for p in route.split("/") if p]
         is_publish = len(parts) == 3 and parts[0] == "runs" and parts[2] == "publish"
-        if route not in ("/runs", "/strategies/import", "/comparisons", "/optimizations", "/walkforwards", "/montecarlo") and not is_publish:
+        is_job_stop = len(parts) == 3 and parts[0] == "run-jobs" and parts[2] == "stop"
+        if route not in ("/runs", "/run-jobs", "/strategies/import", "/comparisons", "/optimizations", "/walkforwards", "/montecarlo") and not is_publish and not is_job_stop:
             self._send_error(404, "not_found", f"unknown route: {route}")
             return
         try:
+            if route == "/run-jobs":
+                payload = self._read_json_body()
+                record = run_jobs.registry.start(
+                    payload,
+                    runs_dir=self._config["runs"],
+                    public_dir=self._config["public"],
+                    strategy_dir=self._config["strategy_dir"],
+                )
+                self._send_json(201, {"job": run_jobs.registry.poll(record.job_id)})
+                return
+            if is_job_stop:
+                job = run_jobs.registry.stop(unquote(parts[1]))
+                self._send_json(200, {"job": job})
+                return
             if route == "/strategies/import":
                 payload = self._read_json_body()
                 entry = import_strategy_payload(payload, self._config["strategy_dir"])
@@ -479,6 +506,7 @@ def create_server(
         "walkforwards": str(walkforwards),
         "montecarlo": str(montecarlo),
     }
+    run_jobs.registry.configure(runs_dir=str(runs), public_dir=str(public))
     return server
 
 
@@ -516,6 +544,8 @@ def main(argv=None) -> int:
     except KeyboardInterrupt:
         pass
     finally:
+        # Never leave an orphan worker behind when the bridge goes down.
+        run_jobs.shutdown()
         server.server_close()
     return 0
 

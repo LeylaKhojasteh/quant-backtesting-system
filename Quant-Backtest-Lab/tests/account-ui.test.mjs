@@ -56,5 +56,8 @@ describe('account UI wiring', () => {
     const src = app('readiness.ts');
     assert.ok(src.includes('run.account.accountReady === true'));
     assert.ok(src.includes('Not available'));
+    assert.ok(!src.includes('Result reliability'), 'reliability row must be removed');
+    assert.ok(src.includes("'Off'"), 'price-term runs report Account Off');
+    assert.ok(src.includes('Price-term results are available'));
   });
 });

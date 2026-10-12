@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import { RunProvider } from "./run-context";
 import { BridgeProvider } from "./bridge-status";
+import { RunJobProvider } from "./run-job-context";
 import { WorkspaceProvider } from "./workspace-context";
 
 export const metadata: Metadata = {
@@ -26,7 +27,9 @@ export default function RootLayout({
       <body className="antialiased">
         <RunProvider>
           <BridgeProvider>
-            <WorkspaceProvider>{children}</WorkspaceProvider>
+            <RunJobProvider>
+              <WorkspaceProvider>{children}</WorkspaceProvider>
+            </RunJobProvider>
           </BridgeProvider>
         </RunProvider>
       </body>

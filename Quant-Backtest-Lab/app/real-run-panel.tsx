@@ -5,6 +5,7 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/compone
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { useBridge } from './bridge-status';
 import { useRunSource } from './run-context';
+import { useRunJob } from './run-job-context';
 import { useWorkspace } from './workspace-context';
 import {
   BridgeError,
@@ -13,7 +14,6 @@ import {
   listInstruments,
   listStrategies,
   listTimeframes,
-  submitRun,
   type DatasetInfo,
   type InstrumentInfo,
   type RunDetail,
@@ -45,7 +45,8 @@ function paramLabel(key: string): string {
  */
 export function RealRunPanel() {
   const { state: bridge, refresh } = useBridge();
-  const { refreshArchived, setSource } = useRunSource();
+  const { refreshArchived } = useRunSource();
+  const { job: activeJob, active: jobActive, start: startJob, outcome, clearOutcome } = useRunJob();
   const { pendingConfig, clearReuse, catalogVersion } = useWorkspace();
   const connected = bridge.status === 'connected';
 
@@ -76,14 +77,19 @@ export function RealRunPanel() {
   const [, setQuoteCurrency] = useState('USD');
   const [, setTickSize] = useState('0.01');
 
-  const [running, setRunning] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
   const [reuseWarning, setReuseWarning] = useState<string | null>(null);
   // Synchronous guard so two clicks in the same tick cannot start two runs
-  // (the `running` state update is async).
+  // (provider state updates are async). Cleared on terminal outcome.
   const inFlight = useRef(false);
+  // The activity bar owns the running state; the form only mirrors it.
+  // Terminal outcome text is derived during render (no cascading effect):
+  // completion is announced by the page shell after auto-loading.
+  const running = jobActive;
+  const shownError = runError ?? (outcome?.kind === 'failed' ? `run failed: ${outcome.message}` : null);
+  const shownNotice = notice ?? (outcome?.kind === 'stopped' ? 'Backtest stopped · run discarded' : null);
   // Keep the current selection so a catalog reload (e.g. after a strategy
   // delete) does not silently reset it unless it was actually removed.
   const strategyIdRef = useRef('');
@@ -340,7 +346,7 @@ export function RealRunPanel() {
     inFlight.current = true;
     setRunError(null);
     setNotice(null);
-    setRunning(true);
+    clearOutcome();
     // Typed strategy parameters derived from declared metadata (no hardcoding).
     const parameters: Record<string, unknown> = {};
     for (const [key, desc] of Object.entries(strategy.parameters)) {
@@ -351,7 +357,10 @@ export function RealRunPanel() {
       else parameters[key] = String(value);
     }
     try {
-      const response = await submitRun({
+      // Async job: the worker runs the existing runner; the activity bar
+      // tracks it and the page shell auto-loads the result on completion.
+      // The currently visible result stays until then (never cleared here).
+      await startJob({
         strategy: { selector: strategy.id, parameters },
         market: {
           dataset_id: dataset.dataset_id,
@@ -384,18 +393,18 @@ export function RealRunPanel() {
           : {}),
         publish: true,
       });
-      // Refresh the served manifest, then switch the RunProvider to the new
-      // run so the existing dashboard renders it without a manual reload.
-      await refreshArchived();
-      setSource({ mode: 'archived', runId: response.run_id });
-      setNotice(`Published ${response.run_id} · ${response.summary.total_trades} trades`);
+      setNotice('Backtest started — tracking live progress above.');
+      // Refresh the library in the background so the new run appears there
+      // on completion even if the manifest lags by a poll tick.
+      refreshArchived();
     } catch (err) {
       // Never fall back to Demo on a real-run failure.
-      if (err instanceof BridgeError) setRunError(`${err.code}: ${err.message}`);
-      else setRunError(err instanceof Error ? err.message : 'run failed');
-    } finally {
       inFlight.current = false;
-      setRunning(false);
+      if (err instanceof BridgeError) {
+        setRunError(err.code === 'run_in_progress'
+          ? 'A backtest is already running — stop it before starting another.'
+          : `${err.code}: ${err.message}`);
+      } else setRunError(err instanceof Error ? err.message : 'run failed');
     }
   };
 
@@ -530,16 +539,28 @@ export function RealRunPanel() {
           <AlertTriangle size={12} /> {reuseWarning}
         </p>
       )}
-      {runError && (
+      {shownError && (
         <p className="rr-error" role="alert">
-          <AlertTriangle size={12} /> {runError}
+          <AlertTriangle size={12} /> {shownError}
         </p>
       )}
-      {notice && <p className="rr-notice" role="status">{notice}</p>}
+      {shownNotice && <p className="rr-notice" role="status">{shownNotice}</p>}
 
-      <button className="primary run" onClick={submit} disabled={!ready}>
+      {activeJob && (
+        <p className="rr-notice" role="status">
+          {activeJob.state === 'stopping' ? 'Stopping the active backtest…' : `Tracking ${activeJob.job_id} · ${activeJob.stage_label}`}
+        </p>
+      )}
+
+      <button
+        className="primary run"
+        onClick={submit}
+        disabled={!ready}
+        aria-disabled={!ready}
+        title={running ? 'A backtest is already running — stop it before starting another.' : undefined}
+      >
         {running ? <Loader2 size={15} className="spin" /> : <Play size={15} fill="currentColor" />}
-        {running ? 'Running backtest…' : 'Run Backtest'}
+        {running ? 'Backtest running…' : 'Run Backtest'}
       </button>
       <p className="config-note">Archives + report + publishes to the dashboard</p>
 

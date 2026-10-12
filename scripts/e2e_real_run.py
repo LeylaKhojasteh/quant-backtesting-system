@@ -58,10 +58,19 @@ WAIT_ROW_JS = ("(([text,notText]) => new Promise(res => {"
                " const ok=()=>{const r=document.querySelector('.overview-trade-log tbody tr');"
                "  return !!r && r.textContent.includes(text) && (!notText || !r.textContent.includes(notText));};"
                " if(ok())return res(true);" + _POLL.replace("MAX", "25000") + "}))")
-WAIT_DONE_JS = ("(() => new Promise(res => {"
-                " const ok=()=>{const n=document.querySelector('.rr-notice');const b=document.querySelector('.demo-badge');"
-                "  return !!n && !!b && b.textContent.trim()==='ARCHIVED RUN';};"
-                " if(ok())return res(true);" + _POLL.replace("MAX", "150000") + "}))()")
+WAIT_DONE_JS = ("((() => new Promise(res => {"
+                " const ok=()=>{const b=document.querySelector('.demo-badge');"
+                "  return !!b && b.textContent.trim()==='ARCHIVED RUN';};"
+                " if(ok())return res(true);" + _POLL.replace("MAX", "180000") + "}))())")
+# v1.0.1 async jobs: the run button disables while active; completion is
+# announced in the run-context band (.run-context-bar .rr-notice).
+WAIT_JOB_DONE_JS = ("(() => new Promise(res => {"
+                   " const ok=()=>{const n=document.querySelector('.run-context-bar .rr-notice');"
+                   "  return !!n && /Completed/.test(n.textContent||'')};"
+                   " if(ok())return res(true);" + _POLL.replace("MAX", "150000") + "}))()")
+WAIT_ACTIVITY_JS = ("(() => new Promise(res => {"
+                   " const ok=()=>!!document.querySelector('.run-activity');"
+                   " if(ok())return res(true);" + _POLL.replace("MAX", "30000") + "}))()")
 WAIT_ENABLED_JS = ("(() => new Promise(res => {"
                    " const ok=()=>{const b=[...document.querySelectorAll('.real-run button')].find(x=>x.textContent.includes('Run Backtest'));return !!b && !b.disabled;};"
                    " if(ok())return res(true);" + _POLL.replace("MAX", "30000") + "}))()")
@@ -69,11 +78,13 @@ WAIT_INPUT_JS = ("(([sel,value]) => new Promise(res => {"
                  " const ok=()=>{const e=document.querySelector(sel);return !!e && e.value===value;};"
                  " if(ok())return res(true);" + _POLL.replace("MAX", "10000") + "}))")
 
-# Page-side observer so a transient "Running…" state is never missed between polls.
+# Page-side observer so a transient activity-bar state is never missed.
+# v1.0.1: the live activity bar (.run-activity) carries the Running state;
+# the Run Backtest button itself disables while a job is active.
 INSTALL_OBSERVER_JS = """(() => {
   window.__sawRunning = false;
   const scan = () => {
-    if ([...document.querySelectorAll('.real-run button')].some(b => b.textContent.includes('Running'))) window.__sawRunning = true;
+    if (document.querySelector('.run-activity')) window.__sawRunning = true;
   };
   scan();
   if (window.__runMo) window.__runMo.disconnect();
@@ -83,7 +94,7 @@ INSTALL_OBSERVER_JS = """(() => {
   return 'installed';
 })()"""
 SAW_RUNNING_JS = "!!window.__sawRunning"
-HAS_ERROR_JS = "!!document.querySelector('.rr-error')"
+HAS_ERROR_JS = "!!document.querySelector('.real-run .rr-error')"
 
 SET_INPUT_JS = """(([sel, value]) => {
   const el = document.querySelector(sel);
@@ -96,8 +107,8 @@ SET_INPUT_JS = """(([sel, value]) => {
 })"""
 
 CLICK_RUN_JS = """(() => {
-  const b = [...document.querySelectorAll('.real-run button')]
-    .find(x => x.textContent.includes('Run Backtest') || x.textContent.includes('Running'));
+  const b = [...document.querySelectorAll('.real-run button.primary')]
+    .find(x => x.textContent.includes('Run Backtest') || x.textContent.includes('Backtest running'));
   if (!b) return 'NO_BTN';
   b.click();
   return 'CLICKED';
@@ -191,17 +202,24 @@ def main() -> int:
         cdp.evaluate(f"({WAIT_ENABLED_JS})")
         cdp.evaluate(CLICK_RUN_JS)
         err_shown = False
-        for _ in range(40):  # the failing run still reads the full file first
+        for _ in range(80):  # async job: worker failure lands after polling
             if cdp.evaluate(HAS_ERROR_JS):
                 err_shown = True
                 break
             time.sleep(1.5)
-        ok &= check("bridge error displayed for empty range", err_shown,
-                    cdp.evaluate(f"({TEXT_JS})('.rr-error')"))
+        ok &= check("job failure displayed for empty range",
+                    cdp.evaluate(f"({WAIT_TEXT_JS})(['.run-activity','Backtest failed'])"),
+                    cdp.evaluate(f"({TEXT_JS})('.run-activity')"))
         runs_after_err = cdp.evaluate("document.querySelectorAll('.run-source button').length")
         ok &= check("failed run adds no selector entry", runs_after_err == runs_before_err, f"{runs_before_err} -> {runs_after_err}")
         ok &= check("no fallback: still Demo", cdp.evaluate(
             "document.querySelector('.run-source button.source-active')?.textContent.includes('Demo')"))
+        # v1.0.1: only one active job is allowed. The failed job above is
+        # terminal, so the slot is free; reload for a clean form state.
+        cdp.call("Page.navigate", {"url": APP_URL})
+        ok &= check("app reloads Demo after failure", cdp.evaluate(f"({WAIT_BADGE_JS})('DEMO')"))
+        ok &= check("bridge reconnects after reload",
+                    cdp.evaluate(f"({WAIT_TEXT_JS})(['.engine','Connected'])"))
 
         # ---- configure + run a known real-data candle_direction backtest -----
         set_dates(cdp, "2025-01-02", "2025-01-02")
@@ -215,8 +233,10 @@ def main() -> int:
         # duplicate clicks in the same tick must not start a second run
         cdp.evaluate("(() => { const b=[...document.querySelectorAll('.real-run button')].find(x=>x.textContent.includes('Running')||x.textContent.includes('Run Backtest')); if(b){b.click();b.click();} return 'ok'; })()")
 
-        ok &= check("backtest completes + auto-loads", cdp.evaluate(WAIT_DONE_JS, timeout=180),
-                    cdp.evaluate(f"({TEXT_JS})('.rr-notice')"))
+        ok &= check("activity bar appears", cdp.evaluate(WAIT_ACTIVITY_JS),
+                    cdp.evaluate(f"({TEXT_JS})('.run-activity')"))
+        ok &= check("backtest completes + auto-loads", cdp.evaluate(WAIT_DONE_JS, timeout=240),
+                    cdp.evaluate(f"({TEXT_JS})('.run-context-bar .rr-notice')"))
         ok &= check("Running state appears", cdp.evaluate(SAW_RUNNING_JS))
         runs_after = cdp.evaluate("document.querySelectorAll('.run-source button').length")
         ok &= check("exactly one new run (duplicate clicks ignored)", runs_after == runs_before + 1,
