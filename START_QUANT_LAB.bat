@@ -7,4 +7,7 @@ if exist ".venv\Scripts\python.exe" (
 ) else (
   python "scripts\start_quant_lab.py"
 )
+echo.
+echo (Press any key to close this window.)
+pause >nul
 endlocal
