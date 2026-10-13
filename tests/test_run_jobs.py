@@ -310,6 +310,28 @@ class RunJobsTest(unittest.TestCase):
         self.assertTrue(removed["run_dir"])
         self.assertFalse((self.runs / "run_half").exists())
 
+    def test_active_clears_after_unpolled_completion(self):
+        """GET /run-jobs/active must not return a completed job.
+
+        Regression: the worker can finish while nobody polls (closed tab).
+        The in-memory record then stays non-terminal and /active keeps
+        returning the finished job, blocking boot and new starts.
+        """
+        _, started = self._post("/run-jobs", self._payload())
+        job_id = started["job"]["job_id"]
+        final = self._wait_state(job_id)
+        self.assertEqual(final["state"], "completed")
+        # Fresh bridge view without polling first: active must reconcile
+        # against the worker-owned status file and report idle.
+        self.assertIsNone(self._get("/run-jobs/active")["job"])
+        # And a new job can start immediately (no stale 409).
+        status, second = self._post("/run-jobs", self._payload())
+        self.assertEqual(status, 201, second)
+        try:
+            self._wait_state(second["job"]["job_id"])
+        finally:
+            self._post(f"/run-jobs/{second['job']['job_id']}/stop", {})
+
     def test_conflict_and_job_not_found_errors(self):
         self.assertEqual(run_errors.RunConflictError.code, "run_in_progress")
         self.assertEqual(run_errors.RunConflictError.http_status, 409)

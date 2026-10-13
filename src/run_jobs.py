@@ -27,6 +27,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -34,6 +35,42 @@ from pathlib import Path
 
 TERMINAL_STATES = ("completed", "failed", "stopped")
 ACTIVE_STATES = ("queued", "running", "stopping")
+
+
+def _atomic_write_json(path: Path, doc: dict, *, retries: int = 10) -> None:
+    """Atomically write ``doc`` as JSON, tolerating Windows races.
+
+    The bridge and the worker process both write the same ``job.json``
+    (bridge: stop markers; worker: heartbeat/stage events). On Windows
+    ``os.replace`` raises ``PermissionError`` (WinError 5/32) when the other
+    process holds the file at that instant. Retry briefly with a unique temp
+    name per attempt instead of failing the stop request.
+    """
+    import uuid as _uuid
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    last: OSError | None = None
+    for _ in range(max(1, retries)):
+        tmp = path.parent / f"{path.stem}.tmp-{os.getpid()}-{_uuid.uuid4().hex[:8]}.json"
+        try:
+            tmp.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+            os.replace(tmp, path)
+            return
+        except PermissionError as exc:
+            last = exc
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            time.sleep(0.05)
+        except OSError:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
+    if last is not None:
+        raise last
 
 STAGE_LABELS = {
     "queued": "Queued",
@@ -115,7 +152,30 @@ class JobRegistry:
             if active is None:
                 return None
             record = self._jobs.get(active)
-            if record is None or record.state in TERMINAL_STATES:
+            if record is None:
+                self._active_job_id = None
+                return None
+            if record.state not in TERMINAL_STATES:
+                # Reconcile with the worker-owned status file: the worker may
+                # have completed while nobody was polling (closed tab, idle
+                # bridge). A completed job must never be reported as active —
+                # otherwise boot refuses to load the newest run and new starts
+                # get a stale 409.
+                try:
+                    status = json.loads(self.status_path(active).read_text(encoding="utf-8"))
+                except OSError:
+                    status = {}
+                if str(status.get("state") or "") in TERMINAL_STATES:
+                    if record.state != "stopping":
+                        record.state = str(status.get("state"))
+                    record.run_id = status.get("run_id") or record.run_id
+                    record.finished_at = status.get("finished_at") or record.finished_at
+                    record.exit_code = status.get("exit_code")
+                    record.error = status.get("error")
+                    record.events = list(status.get("events", record.events or []))[-_MAX_EVENTS:]
+                    self._active_job_id = None
+                    return None
+            if record.state in TERMINAL_STATES:
                 self._active_job_id = None
                 return None
             return active
@@ -136,9 +196,7 @@ class JobRegistry:
         if state is not None:
             status["state"] = state
         status["stage"] = stage
-        tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(status, indent=2), encoding="utf-8")
-        os.replace(tmp, path)
+        _atomic_write_json(path, status)
 
     def _status_run_id_locked(self, job_id: str) -> str | None:
         try:
@@ -208,9 +266,7 @@ class JobRegistry:
             "heartbeat_at": None,
             "events": [{"t": _utcnow(), "stage": "queued", "event": "Run queued"}],
         }
-        tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(doc, indent=2), encoding="utf-8")
-        os.replace(tmp, path)
+        _atomic_write_json(path, doc)
 
     def poll(self, job_id: str) -> dict:
         """Merge worker-owned status file into the registry record."""
@@ -314,14 +370,24 @@ class JobRegistry:
                 return self.describe_locked(job_id)
             record.state = "stopping"
             proc = self._proc
-            self._append_event_locked(job_id, "stopping", "Stop requested", state="stopping")
+        # Status-file writes are best-effort here: the worker may hold the
+        # file at this instant (Windows). The kill below must never be
+        # skipped because of a transient write race.
+        try:
+            with self._lock:
+                self._append_event_locked(job_id, "stopping", "Stop requested", state="stopping")
+        except OSError:
+            pass
         exit_code = self._terminate_worker(proc)
         with self._lock:
             record.state = "stopped"
             record.finished_at = _utcnow()
             record.exit_code = exit_code
             record.error = None
-            self._append_event_locked(job_id, "stopping", f"Worker stopped (exit code {exit_code})", state="stopped")
+            try:
+                self._append_event_locked(job_id, "stopping", f"Worker stopped (exit code {exit_code})", state="stopped")
+            except OSError:
+                pass
             if self._active_job_id == job_id:
                 self._active_job_id = None
             run_id = self._status_run_id_locked(job_id)

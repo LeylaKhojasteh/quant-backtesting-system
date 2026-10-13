@@ -46,6 +46,41 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _atomic_write_json(path: Path, doc: dict, *, retries: int = 10) -> None:
+    """Atomic JSON write tolerating the bridge's concurrent writes.
+
+    Mirrors ``src.run_jobs._atomic_write_json`` (kept local so the worker
+    module has no import-time dependency on the registry). Unique temp name
+    per attempt + short retries defeat WinError 5/32 races.
+    """
+    import time as _time
+    import uuid as _uuid
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    last: OSError | None = None
+    for _ in range(max(1, retries)):
+        tmp = path.parent / f"{path.stem}.tmp-{os.getpid()}-{_uuid.uuid4().hex[:8]}.json"
+        try:
+            tmp.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+            os.replace(tmp, path)
+            return
+        except PermissionError as exc:
+            last = exc
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            _time.sleep(0.05)
+        except OSError:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
+    if last is not None:
+        raise last
+
+
 class StatusFile:
     """Atomic read-modify-write access to one job's ``job.json``."""
 
@@ -63,9 +98,7 @@ class StatusFile:
         with self._lock:
             doc = self.read()
             doc.update(fields)
-            tmp = self._path.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(doc, indent=2), encoding="utf-8")
-            os.replace(tmp, self._path)
+            _atomic_write_json(self._path, doc)
             return doc
 
     def add_event(self, stage: str, event: str, *, state: str | None = None,
@@ -81,9 +114,7 @@ class StatusFile:
                 doc.update(extra)
             doc["stage"] = stage
             doc["heartbeat_at"] = _utcnow()
-            tmp = self._path.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(doc, indent=2), encoding="utf-8")
-            os.replace(tmp, self._path)
+            _atomic_write_json(self._path, doc)
             return doc
 
     def heartbeat(self) -> None:
