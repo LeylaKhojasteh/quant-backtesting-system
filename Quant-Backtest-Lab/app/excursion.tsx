@@ -1,7 +1,7 @@
 'use client';
 
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { fmt } from './demo';
+import { fmt } from './format';
 
 export const MAE_EXPLANATION =
   'Maximum Adverse Excursion is unavailable because this run does not contain intratrade excursion data.';

@@ -1,6 +1,7 @@
 'use client';
 
-import { fmt, time, type Trade } from './demo';
+import { fmt, time } from './format';
+import type { Trade } from './types';
 import type { Excursion } from './analytics';
 
 type Phase = { key: string; label: string; at: number; note: string };

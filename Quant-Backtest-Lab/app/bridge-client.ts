@@ -73,6 +73,82 @@ export async function loadDatasetTicks(
   );
 }
 
+/* ------------------------------------------------------------------ */
+/* v1.0.2 run-scoped real market context (candles + ticks)             */
+/* ------------------------------------------------------------------ */
+
+export interface RunCandle {
+  timestamp: string;
+  bid_open: number;
+  bid_high: number;
+  bid_low: number;
+  bid_close: number;
+  ask_open: number;
+  ask_high: number;
+  ask_low: number;
+  ask_close: number;
+}
+
+export interface RunCandlesResponse {
+  run_id: string;
+  dataset_id: string | null;
+  symbol: string;
+  timeframe: string;
+  start: string;
+  end: string;
+  count: number;
+  candles: RunCandle[];
+}
+
+export interface RunTick {
+  timestamp: string;
+  bid: number;
+  ask: number;
+  bid_volume: number;
+  ask_volume: number;
+  spread: number;
+}
+
+export interface RunTicksResponse {
+  run_id: string;
+  dataset_id: string | null;
+  symbol: string;
+  timeframe: string;
+  count: number;
+  ticks: RunTick[];
+}
+
+/** Real candles for one archived run (bounded window; run is authoritative). */
+export async function getRunCandles(
+  runId: string,
+  opts: { start?: string; end?: string; limit?: number } = {},
+  fetchImpl?: typeof fetch,
+): Promise<RunCandlesResponse> {
+  const q = new URLSearchParams();
+  if (opts.start) q.set('start', opts.start);
+  if (opts.end) q.set('end', opts.end);
+  if (opts.limit) q.set('limit', String(opts.limit));
+  const suffix = q.toString() ? `?${q.toString()}` : '';
+  return requestJson<RunCandlesResponse>(`/runs/${enc(runId)}/candles${suffix}`, undefined, fetchImpl);
+}
+
+/** Real BID/ASK ticks for one archived run (bounded window or `around` a fill). */
+export async function getRunTicks(
+  runId: string,
+  opts: { start?: string; end?: string; around?: string; beforeMs?: number; afterMs?: number; limit?: number } = {},
+  fetchImpl?: typeof fetch,
+): Promise<RunTicksResponse> {
+  const q = new URLSearchParams();
+  if (opts.start) q.set('start', opts.start);
+  if (opts.end) q.set('end', opts.end);
+  if (opts.around) q.set('around', opts.around);
+  if (opts.beforeMs) q.set('before_ms', String(opts.beforeMs));
+  if (opts.afterMs) q.set('after_ms', String(opts.afterMs));
+  if (opts.limit) q.set('limit', String(opts.limit));
+  const suffix = q.toString() ? `?${q.toString()}` : '';
+  return requestJson<RunTicksResponse>(`/runs/${enc(runId)}/ticks${suffix}`, undefined, fetchImpl);
+}
+
 export interface AccountPayload {
   account_currency: string;
   starting_balance: number;

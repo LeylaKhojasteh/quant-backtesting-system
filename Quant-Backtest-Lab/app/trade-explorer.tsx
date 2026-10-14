@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowUpDown, Search, X } from 'lucide-react';
-import { fmt, time } from './demo';
+import { fmt, time } from './format';
 import { ExcursionValue } from './excursion';
 import type { EnrichedTrade } from './analytics';
 

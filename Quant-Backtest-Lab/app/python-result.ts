@@ -52,6 +52,8 @@ export type PythonResult = {
     timeframe: string;
     start: string;
     end: string;
+    requested_start?: string;
+    requested_end?: string;
     parameters: Record<string, unknown>;
     data_source?: string;
     data_fingerprint?: string;
@@ -307,6 +309,13 @@ export function mapPythonResultToBacktestRun(payload: PythonResult): unknown {
     },
     instrument: { symbol: payload.config.symbol, timeframe: payload.config.timeframe, timezone: 'UTC' },
     dateRange: {
+      // Requested backtest window (authoritative for display). Legacy runs
+      // without requested_* fall back to the observed coverage.
+      startUtc: pythonTimeToUtcIso(payload.config.requested_start || payload.config.start),
+      endUtc: pythonTimeToUtcIso(payload.config.requested_end || payload.config.end),
+    },
+    dataCoverage: {
+      // Actual first/last observed tick coverage of the run.
       startUtc: pythonTimeToUtcIso(payload.config.start),
       endUtc: pythonTimeToUtcIso(payload.config.end),
     },
@@ -352,6 +361,14 @@ export function mapPythonResultToBacktestRun(payload: PythonResult): unknown {
         },
     trades,
     equity,
+    execution: {
+      signalsReceived: payload.execution.signals_received ?? null,
+      signalsExecuted: payload.execution.signals_executed ?? null,
+      signalsIgnored: payload.execution.signals_ignored ?? null,
+      engine: payload.execution.engine ?? null,
+      startedAtUtc: payload.execution.started_at ?? null,
+      finishedAtUtc: payload.execution.finished_at ?? null,
+    },
     metrics: {
       trades: m.total_trades,
       wins: m.wins,

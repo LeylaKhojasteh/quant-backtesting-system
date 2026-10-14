@@ -15,6 +15,7 @@ observable; uses headless Chrome via CDP like the other E2E scripts.
 """
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -34,7 +35,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
 
-APP = "http://127.0.0.1:5173/"
+APP = os.environ.get("QBL_APP_URL", "http://127.0.0.1:5173/")
 BRIDGE = "http://127.0.0.1:8765"
 PUBLIC = ROOT / "Quant-Backtest-Lab" / "public"
 MANIFEST = PUBLIC / "adapters-run-manifest.json"
@@ -116,6 +117,12 @@ def main() -> int:
     files_before = set(p.name for p in PUBLIC.glob("runs-*-result.json"))
     tmp = Path(tempfile.mkdtemp(prefix="qbl-e2e-jobs-"))
     runs = tmp / "runs"
+    # The app advertises run_0001 from the repo manifest; the bridge must own
+    # that archive too so run-scoped market context resolves.
+    runs.mkdir(parents=True, exist_ok=True)
+    seed = ROOT / "runs" / "run_0001"
+    if seed.is_dir():
+        shutil.copytree(seed, runs / "run_0001")
     strat = tmp / "strat"
     strat.mkdir(parents=True)
     (strat / "slow_signal.py").write_text(SLOW_STRATEGY, encoding="utf-8")
@@ -174,6 +181,13 @@ def main() -> int:
                                     cdp.evaluate(f"({TEXT_JS})('.run-status')") or "")
         run_a = m.group(1) if m else None
         ok &= check("A: new run archived + rendered", bool(run_a), run_id_a[:80])
+        # v1.0.2 QA fix: a terminal job must not be shown as an ACTIVE tracked job.
+        sidebar = cdp.evaluate(f"({TEXT_JS})('.real-run')") or ""
+        ok &= check("A: sidebar no longer shows a tracked active job",
+                    "Tracking " not in sidebar, sidebar[:120])
+        status, actv = job_api("/run-jobs/active")
+        ok &= check("A: /run-jobs/active is null after completion",
+                    status == 200 and (actv.get("job") is None), str(actv.get("job"))[:80])
 
         # ---- B: reload during run -> reconnect same job ---------------------
         # Start the slow job via the API (the worker runs independently of

@@ -2,7 +2,8 @@
 // Every value here is computed from `trades`; nothing is hard-coded.
 // MAE/MFE come from the seeded replay path (see demo.tradePath) and are labelled
 // as seeded in the UI until the Python engine supplies observed excursions.
-import { candles, trades, tradePath, type Trade } from './demo';
+import { tradePath, trades } from './demo';
+import type { Trade } from './types';
 import type { BacktestRun } from './schema';
 
 /** Seeded excursion values (demo replay path). Always concrete numbers. */
@@ -409,33 +410,35 @@ export function tradeQuality(list: readonly EnrichedTrade[]): TradeQuality {
 }
 
 export type SignalAnalysis = {
-  totalSignals: number;
+  /** Real backend signal count (execution.signals_received), or null if unknown. */
+  totalSignals: number | null;
   executed: number;
-  ignored: number;
-  /** Share of strategy signals that became an executed trade. */
-  executionRatePct: number;
+  ignored: number | null;
+  /** Share of strategy signals that became an executed trade; null if unknown. */
+  executionRatePct: number | null;
 };
 
 /**
- * Signal accounting. Every strategy candle produces a directional signal; a
- * signal becomes a trade only when entry conditions and price are satisfied.
+ * Signal accounting from REAL backend metadata. `totalSignals` must come from
+ * the run's archived `execution.signals_received`; it is never inferred from a
+ * candle count, a trade count, or a fixture array. When it is unknown (null),
+ * the derived rates stay null so the UI renders N/A instead of a fabricated
+ * percentage.
  */
 export function signalAnalysis(
   list: readonly EnrichedTrade[],
-  totalSignals = totalSignalCount(),
+  totalSignals: number | null,
 ): SignalAnalysis {
   const executed = list.length;
+  if (totalSignals === null || totalSignals === undefined || totalSignals <= 0) {
+    return { totalSignals: null, executed, ignored: null, executionRatePct: null };
+  }
   return {
     totalSignals,
     executed,
     ignored: Math.max(0, totalSignals - executed),
-    executionRatePct: totalSignals > 0 ? (executed / totalSignals) * 100 : 0,
+    executionRatePct: (executed / totalSignals) * 100,
   };
-}
-
-/** Strategy signals available in the seeded window: one per M15 candle. */
-export function totalSignalCount() {
-  return candles.length;
 }
 
 export type HourBucket = { hour: number; trades: number; wins: number; totalPnl: number };

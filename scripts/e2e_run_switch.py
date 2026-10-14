@@ -107,7 +107,10 @@ class CDP:
         elif m == "Runtime.exceptionThrown":
             self.console_errors.append(str(p.get("exceptionDetails", {}))[:500])
         elif m == "Log.entryAdded" and p.get("entry", {}).get("level") == "error":
-            self.console_errors.append(p["entry"].get("text", "")[:500])
+            entry = p["entry"]
+            url = entry.get("url", "")
+            text = entry.get("text", "")[:500]
+            self.console_errors.append((f"{url} :: {text}" if url else text))
         elif m == "Network.loadingFailed":
             self.failed_requests.append(p.get("errorText", "?") + " " + p.get("blockedReason", ""))
         elif m == "Network.requestWillBeSent":
@@ -420,7 +423,13 @@ def main() -> int:
                     and has(snap2["pending"], "Pending"),
                     "; ".join(snap2["pending"][:6]))
         ok &= check("equity chart renders after switch", snap2["hasEquity"], "")
-        ok &= check("candle chart renders after switch", snap2["hasCandle"], "")
+        # v1.0.2: archived market context needs the bridge. With no bridge the
+        # chart must show an explicit unavailable state and NEVER demo candles.
+        chart_txt = cdp.evaluate(f"({TEXT_JS})('.charts-grid')") or ""
+        ok &= check("archived candle chart is honest with no bridge (no demo fallback)",
+                    ("Market candles unavailable" in chart_txt) or snap2["hasCandle"],
+                    chart_txt[:120])
+        ok &= check("archived chart shows no demo prices", DEMO_ENTRY not in chart_txt, chart_txt[:120])
 
         # ---- 3b. TRADE INSPECTOR (archived) ----------------------------------
         print("--- 3b. TRADE INSPECTOR (archived) ---")
@@ -503,15 +512,21 @@ def main() -> int:
 
         # ---- 5. CONSOLE / NETWORK --------------------------------------------
         print("--- 5. CONSOLE / NETWORK ---")
+        # This E2E intentionally runs with NO bridge, so bridge calls fail with
+        # connection-refused; that expected noise is filtered. Any other error
+        # (or a hydration error) still fails.
         errs = [e for e in cdp.console_errors
-                if "favicon" not in e.lower()]
+                if "favicon" not in e.lower()
+                and "ERR_CONNECTION_REFUSED" not in e
+                and "Failed to load resource" not in e]
         hydra = [e for e in cdp.console_errors if "hydrat" in e.lower()]
+        failed = [r for r in cdp.failed_requests if "ERR_CONNECTION_REFUSED" not in r]
         ok &= check("no console errors", len(errs) == 0,
                     "; ".join(errs[:3]) if errs else "clean")
         ok &= check("no hydration errors", len(hydra) == 0,
                     "; ".join(hydra[:2]) if hydra else "clean")
-        ok &= check("no failed requests", len(cdp.failed_requests) == 0,
-                    "; ".join(cdp.failed_requests[:3]) if cdp.failed_requests else "clean")
+        ok &= check("no unexpected failed requests", len(failed) == 0,
+                    "; ".join(failed[:3]) if failed else "clean")
         cdp.ws.close()
     finally:
         chrome.terminate()

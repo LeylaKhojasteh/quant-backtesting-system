@@ -8,6 +8,7 @@ optimization and walk-forward still work.
 """
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -27,7 +28,7 @@ from scripts.e2e_run_switch import (  # noqa: E402
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-APP_URL = "http://127.0.0.1:5173/?fixture=demo"
+APP_URL = os.environ.get("QBL_APP_URL", "http://127.0.0.1:5173/?fixture=demo")
 BRIDGE = "http://127.0.0.1:8765"
 PUBLIC = ROOT / "Quant-Backtest-Lab" / "public"
 MANIFEST = PUBLIC / "adapters-run-manifest.json"

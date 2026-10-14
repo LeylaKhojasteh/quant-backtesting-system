@@ -170,8 +170,13 @@ def run_detail(runs_dir: str | Path, run_id: str, public_dir: str | Path) -> dic
             "market": {
                 "symbol": conf.get("symbol"),
                 "timeframe": conf.get("timeframe"),
+                # start/end = actual observed tick coverage of the run.
                 "start": conf.get("start"),
                 "end": conf.get("end"),
+                # requested_* = the user's requested backtest window. Absent on
+                # legacy runs; falls back to observed coverage so readers stay safe.
+                "requested_start": conf.get("requested_start") or conf.get("start"),
+                "requested_end": conf.get("requested_end") or conf.get("end"),
                 "data_source": data_source,
                 "dataset_id": conf.get("dataset_id"),
                 "dataset": Path(data_source).name if data_source else None,

@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { fmt } from './demo';
+import { fmt } from './format';
 import { tradeTimelineEvents, type TimelineTone, type TimelineTrade } from './timeline-events';
 
 const TONE_STYLE: Record<TimelineTone, { color: string; label: string }> = {

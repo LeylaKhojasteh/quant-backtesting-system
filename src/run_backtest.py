@@ -288,6 +288,20 @@ def execute_run(
     start_iso = ticks["timestamp"].iloc[0].isoformat().replace("+00:00", "Z")
     end_iso = ticks["timestamp"].iloc[-1].isoformat().replace("+00:00", "Z")
 
+    # The user's requested window is preserved separately from the observed
+    # tick coverage above, so the UI can show the requested range without
+    # confusing it with the actual first/last tick.
+    def _requested_iso(value: str) -> str:
+        import pandas as pd  # local import: keep the hot path dependency-free
+        try:
+            ts = pd.Timestamp(value)
+        except Exception:
+            return str(value or "")
+        return (ts if ts.tz is not None else ts.tz_localize("UTC")).tz_convert("UTC").isoformat().replace("+00:00", "Z")
+
+    requested_start = _requested_iso(request.market.start)
+    requested_end = _requested_iso(request.market.end)
+
     # Archived data source: a friendly logical id for Data Engine runs (never the
     # internal `cache:` resolver key), else the raw path (legacy runs).
     archive_source = request.market.dataset_id if cache_run else str(data_path)
@@ -304,6 +318,8 @@ def execute_run(
             parameters=effective_parameters,
             data_source=archive_source,
             data_fingerprint=_data_fingerprint(request.market),
+            requested_start=requested_start,
+            requested_end=requested_end,
         ),
         trades=records,
         equity=equity,

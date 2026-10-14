@@ -7,7 +7,7 @@
  * Pending with the exact reason from the run, never synthesised from a
  * fictional account.
  */
-import { fmt } from './demo';
+import { fmt } from './format';
 import type { BacktestRun } from './schema';
 import { formatUtcMs } from './utc';
 
@@ -17,7 +17,7 @@ const sum = (v: number[]) => v.reduce((a, b) => a + b, 0);
 const avg = (v: number[]) => (v.length ? sum(v) / v.length : 0);
 const PENDING = 'Pending';
 
-const metric = (label: string, value: string, note = 'Seeded trades · price terms', group?: string): ReportMetric => ({ label, value, note, group });
+const metric = (label: string, value: string, note = 'Price terms — not account currency', group?: string): ReportMetric => ({ label, value, note, group });
 const pending = (label: string, note: string, group?: string): ReportMetric => ({ label, value: PENDING, pending: true, note, group });
 
 /** Continuous win/loss runs over the trade sequence. */
@@ -55,7 +55,19 @@ function rows(run: BacktestRun): TradeRow[] {
 export function reportContext(run: BacktestRun) {
   const ticks = run.dataQuality.inRangeTicks;
   const bars = run.dataQuality.candles;
-  return `${run.instrument.symbol} · ${run.instrument.timeframe} · ${formatUtcMs(Date.parse(run.dateRange.startUtc), { withDate: true })} → ${formatUtcMs(Date.parse(run.dateRange.endUtc))} · ${bars ?? '—'} bars · ${ticks ?? '—'} ticks (seeded) · ${run.trades.length} trades`;
+  const tickText = ticks === null || ticks === undefined ? 'ticks not measured' : `${ticks} ticks`;
+  return `${run.instrument.symbol} · ${run.instrument.timeframe} · ${formatUtcMs(Date.parse(run.dateRange.startUtc), { withDate: true })} → ${formatUtcMs(Date.parse(run.dateRange.endUtc))} · ${bars ?? '—'} bars · ${tickText} · ${run.trades.length} trades`;
+}
+
+/** Median real delay from signal availability to the first eligible entry. */
+function signalEntryDelayMs(run: BacktestRun): number | null {
+  const delays = run.trades
+    .map((t) => (t.signalAvailableUtc ? Date.parse(t.entryTimeUtc) - Date.parse(t.signalAvailableUtc) : null))
+    .filter((v): v is number => v !== null && Number.isFinite(v) && v >= 0);
+  if (!delays.length) return null;
+  delays.sort((a, b) => a - b);
+  const mid = delays.length >> 1;
+  return delays.length % 2 ? delays[mid] : Math.round((delays[mid - 1] + delays[mid]) / 2);
 }
 
 /** Headline labels that must read as Pending for a price-term run. */
@@ -85,8 +97,8 @@ export function headline(run: BacktestRun): [string, string][] {
     ['Short Trades', String(shorts)],
     ['Average Win', m.avgWin !== null && m.avgWin !== undefined ? fmt(m.avgWin) : PENDING],
     ['Average Loss', m.avgLoss !== null && m.avgLoss !== undefined ? fmt(m.avgLoss) : PENDING],
-    ['Best Trade', fmt(Math.max(...t.map((x) => x.pnl)))],
-    ['Worst Trade', fmt(Math.min(...t.map((x) => x.pnl)))],
+    ['Best Trade', t.length ? fmt(Math.max(...t.map((x) => x.pnl))) : PENDING],
+    ['Worst Trade', t.length ? fmt(Math.min(...t.map((x) => x.pnl))) : PENDING],
     ['Avg Duration', m.avgDurationMin !== null && m.avgDurationMin !== undefined ? `${m.avgDurationMin.toFixed(0)} min` : PENDING],
     ['Balance', PENDING],
   ];
@@ -111,7 +123,10 @@ export function reportGroups(run: BacktestRun): Record<string, ReportMetric[]> {
   const winRuns = streaks.filter((s) => s.win);
   const lossRuns = streaks.filter((s) => !s.win);
   const q = run.dataQuality;
-  const ticks = q.inRangeTicks === null || q.inRangeTicks === undefined ? 'Not measured' : `${q.inRangeTicks.toLocaleString('en-US')} (seeded example)`;
+  const ticks = q.inRangeTicks === null || q.inRangeTicks === undefined ? 'Not measured' : q.inRangeTicks.toLocaleString('en-US');
+  const delayMs = signalEntryDelayMs(run);
+  const delayText = delayMs === null ? 'N/A' : `${delayMs.toLocaleString('en-US')} ms`;
+  const signalsReceived = run.execution?.signalsReceived ?? null;
 
   const acc = (extra: string) => accountReason(run, extra);
 
@@ -120,11 +135,11 @@ export function reportGroups(run: BacktestRun): Record<string, ReportMetric[]> {
       metric('Strategy', run.strategy.name, `Version ${run.strategy.version} · ${run.dataMode}`, 'Run Scope'),
       metric('Symbol / Period', `${run.instrument.symbol} / ${run.instrument.timeframe}`, `${formatUtcMs(Date.parse(run.dateRange.startUtc), { withDate: true })} → ${formatUtcMs(Date.parse(run.dateRange.endUtc))}`, 'Run Scope'),
       metric('Inputs', `Stop ${String(run.strategy.parameters.stopDistance)} · TP ${String(run.strategy.parameters.takeProfitDistance)}`, 'Reference result inputs; current configured inputs appear in the run strip', 'Run Scope'),
-      metric('Bars', String(run.dataQuality.candles ?? '—'), 'Seeded M15 candles', 'Dataset'),
-      metric('Ticks', ticks, 'Seeded example; not measured from a loaded file', 'Dataset'),
-      metric('Symbols', '1', 'Single-symbol demo', 'Dataset'),
+      metric('Bars', String(run.dataQuality.candles ?? '—'), `${run.instrument.timeframe} candles in range`, 'Dataset'),
+      metric('Ticks', ticks, 'Ticks read from the canonical cache in range', 'Dataset'),
+      metric('Symbols', '1', 'Single-symbol run', 'Dataset'),
       pending('History Quality', 'Not measured; requires one-minute data and gap validation from the data-validation engine.', 'Dataset'),
-      pending('Modeling Quality', 'Not measured — the production definition comes from the real validation engine. No percentage is shown in demo mode.', 'Dataset'),
+      pending('Modeling Quality', 'Not measured — the production definition comes from the real validation engine.', 'Dataset'),
       pending('Initial Deposit', acc('No account currency or account balance is configured.'), 'Account'),
       pending('Withdrawal', acc('No withdrawals are modelled without an account model.'), 'Account'),
       pending('Balance', acc('Balance = initial account balance + account-currency PnL, which does not exist here.'), 'Account'),
@@ -147,12 +162,12 @@ export function reportGroups(run: BacktestRun): Record<string, ReportMetric[]> {
       pending('Margin Level', 'Requires a real margin model. No simulated margin value is shown.', 'Drawdown'),
     ],
     'Trade Statistics': [
-      metric('Total Trades', String(m.trades), 'Seeded trade count', 'Sample'),
+      metric('Total Trades', String(m.trades), 'Closed trades in the archived run', 'Sample'),
       pending('Total Deals', 'Trade log has no deal-level record; do not assume two deals per trade.', 'Sample'),
       metric('Short Trades (won %)', count(shorts), `${shorts.length} shorts; ${shorts.filter((s) => s.pnl > 0).length} profitable`, 'Sample'),
       metric('Long Trades (won %)', count(longs), `${longs.length} longs; ${longs.filter((s) => s.pnl > 0).length} profitable`, 'Sample'),
-      metric('Profit Trades (% of total)', `${wins.length} (${(m.winRate ?? 0).toFixed(2)}%)`, 'Seeded trade count', 'Outcome'),
-      metric('Loss Trades (% of total)', `${losses.length} (${(losses.length / (m.trades || 1) * 100).toFixed(2)}%)`, 'Seeded trade count', 'Outcome'),
+      metric('Profit Trades (% of total)', `${wins.length} (${(m.winRate ?? 0).toFixed(2)}%)`, 'Profitable closed trades', 'Outcome'),
+      metric('Loss Trades (% of total)', `${losses.length} (${(losses.length / (m.trades || 1) * 100).toFixed(2)}%)`, 'Losing closed trades', 'Outcome'),
       metric('Largest Profit Trade', m.avgWin !== null && m.avgWin !== undefined ? fmt(Math.max(...wins.map((x) => x.pnl))) : PENDING, 'Price terms', 'Outcome'),
       metric('Largest Loss Trade', fmt(Math.min(...losses.map((x) => x.pnl))), 'Price terms', 'Outcome'),
       metric('Average Profit Trade', m.avgWin !== null && m.avgWin !== undefined ? fmt(m.avgWin) : PENDING, 'Price terms', 'Outcome'),
@@ -162,12 +177,12 @@ export function reportGroups(run: BacktestRun): Record<string, ReportMetric[]> {
       metric('Average Position Holding Time', dur(m.avgDurationMin ?? 0), 'Entry to exit · UTC', 'Holding Time'),
     ],
     'Sequences & Ratios': [
-      metric('Maximum Consecutive Wins', `${Math.max(...winRuns.map((s) => s.count))} (${fmt(winRuns.sort((a, b) => b.count - a.count)[0].pnl)})`, 'Count (price-term total)', 'Streaks'),
-      metric('Maximum Consecutive Losses', `${Math.max(...lossRuns.map((s) => s.count))} (${fmt(lossRuns.sort((a, b) => b.count - a.count)[0].pnl)})`, 'Count (price-term total)', 'Streaks'),
-      metric('Maximal Consecutive Profit', `${fmt(Math.max(...winRuns.map((s) => s.pnl)))} (${winRuns.sort((a, b) => b.pnl - a.pnl)[0].count})`, 'Price-term total (count)', 'Streaks'),
-      metric('Maximal Consecutive Loss', `${fmt(Math.min(...lossRuns.map((s) => s.pnl)))} (${lossRuns.sort((a, b) => a.pnl - b.pnl)[0].count})`, 'Price-term total (count)', 'Streaks'),
-      metric('Average Consecutive Wins', fmt(avg(winRuns.map((s) => s.count))), 'Average winning run length', 'Streaks'),
-      metric('Average Consecutive Losses', fmt(avg(lossRuns.map((s) => s.count))), 'Average losing run length', 'Streaks'),
+      metric('Maximum Consecutive Wins', winRuns.length ? `${Math.max(...winRuns.map((s) => s.count))} (${fmt(winRuns.slice().sort((a, b) => b.count - a.count)[0].pnl)})` : PENDING, 'Count (price-term total)', 'Streaks'),
+      metric('Maximum Consecutive Losses', lossRuns.length ? `${Math.max(...lossRuns.map((s) => s.count))} (${fmt(lossRuns.slice().sort((a, b) => b.count - a.count)[0].pnl)})` : PENDING, 'Count (price-term total)', 'Streaks'),
+      metric('Maximal Consecutive Profit', winRuns.length ? `${fmt(Math.max(...winRuns.map((s) => s.pnl)))} (${winRuns.slice().sort((a, b) => b.pnl - a.pnl)[0].count})` : PENDING, 'Price-term total (count)', 'Streaks'),
+      metric('Maximal Consecutive Loss', lossRuns.length ? `${fmt(Math.min(...lossRuns.map((s) => s.pnl)))} (${lossRuns.slice().sort((a, b) => a.pnl - b.pnl)[0].count})` : PENDING, 'Price-term total (count)', 'Streaks'),
+      metric('Average Consecutive Wins', winRuns.length ? fmt(avg(winRuns.map((s) => s.count))) : PENDING, 'Average winning run length', 'Streaks'),
+      metric('Average Consecutive Losses', lossRuns.length ? fmt(avg(lossRuns.map((s) => s.count))) : PENDING, 'Average losing run length', 'Streaks'),
       pending('Sharpe Ratio', 'Standard Sharpe requires a valid account return series (returns per period). Seven price-term trades are not a return series.', 'Statistical Ratios'),
       pending('Sortino Ratio', 'Standard Sortino requires periodic account returns and a target return; it is not computed from losing-trade PnL dispersion.', 'Statistical Ratios'),
       pending('Calmar Ratio', 'Calmar requires account-currency total return and account percent drawdown; neither is available.', 'Statistical Ratios'),
@@ -183,20 +198,21 @@ export function reportGroups(run: BacktestRun): Record<string, ReportMetric[]> {
       pending('Correlation (Profits, MFE)', 'Requires observed favorable excursions for every trade from the engine.', 'Excursion Correlation'),
       pending('Correlation (Profits, MAE)', 'Requires observed adverse excursions for every trade from the engine.', 'Excursion Correlation'),
       pending('Correlation (MFE, MAE)', 'Requires both observed excursion series from the engine.', 'Excursion Correlation'),
-      metric('TP Exits', `${t.filter((x) => x.reason === 'TP').length} (${(t.filter((x) => x.reason === 'TP').length / (m.trades || 1) * 100).toFixed(2)}%)`, 'Seeded exit reasons', 'Execution'),
-      metric('SL Exits', `${t.filter((x) => x.reason === 'SL').length} (${(t.filter((x) => x.reason === 'SL').length / (m.trades || 1) * 100).toFixed(2)}%)`, 'Seeded exit reasons', 'Execution'),
-      metric('End of Data', `${t.filter((x) => x.reason === 'EOD').length} (${(t.filter((x) => x.reason === 'EOD').length / (m.trades || 1) * 100).toFixed(2)}%)`, 'Seeded exit reasons', 'Execution'),
-      metric('Average Entry Spread', m.avgSpreadIn !== null && m.avgSpreadIn !== undefined ? fmt(m.avgSpreadIn) : PENDING, 'Seeded observed entry ticks · price terms', 'Execution'),
-      metric('Average Exit Spread', m.avgSpreadOut !== null && m.avgSpreadOut !== undefined ? fmt(m.avgSpreadOut) : PENDING, 'Seeded observed exit ticks · price terms', 'Execution'),
-      metric('Signal → Entry Delay', '124 ms', 'Signal available to first eligible entry tick · seeded', 'Execution'),
-      metric('Fill-side Checks', '14 / 14 pass', '7 entries + 7 exits checked against observed BID / ASK · seeded', 'Execution'),
-      metric('Execution Model', 'Observed BID / ASK', 'Reference tick-side semantics only; Python not connected', 'Execution'),
+      metric('TP Exits', `${t.filter((x) => x.reason === 'TP').length} (${(t.filter((x) => x.reason === 'TP').length / (m.trades || 1) * 100).toFixed(2)}%)`, 'Take-profit exits', 'Execution'),
+      metric('SL Exits', `${t.filter((x) => x.reason === 'SL').length} (${(t.filter((x) => x.reason === 'SL').length / (m.trades || 1) * 100).toFixed(2)}%)`, 'Stop-loss exits', 'Execution'),
+      metric('End of Data', `${t.filter((x) => x.reason === 'EOD').length} (${(t.filter((x) => x.reason === 'EOD').length / (m.trades || 1) * 100).toFixed(2)}%)`, 'End-of-data exits', 'Execution'),
+      metric('Average Entry Spread', m.avgSpreadIn !== null && m.avgSpreadIn !== undefined ? fmt(m.avgSpreadIn) : PENDING, 'BID/ASK spread observed at executed entries · price terms', 'Execution'),
+      metric('Average Exit Spread', m.avgSpreadOut !== null && m.avgSpreadOut !== undefined ? fmt(m.avgSpreadOut) : PENDING, 'BID/ASK spread observed at executed exits · price terms', 'Execution'),
+      metric('Signals Received', signalsReceived === null ? 'N/A' : String(signalsReceived), signalsReceived === null ? 'Signal count not archived for this run' : 'Signals produced by the strategy for this run', 'Execution'),
+      metric('Signal → Entry Delay', delayText, delayMs === null ? 'Not derivable — signal availability or entry time missing' : 'Median delay from signal availability to first eligible entry', 'Execution'),
+      metric('Fill-side Checks', `${t.length} entries + ${t.length} exits`, 'Per-fill PASS/FAIL against cached ticks is shown in the Trade Inspector', 'Execution'),
+      metric('Execution Model', 'Observed BID / ASK', 'Real tick-level BID/ASK execution (src/backtest.py)', 'Execution'),
     ],
   };
 }
 
 /* ------------------------------------------------------------------------ */
-/* Charts (Analytics view) — price terms, seeded                            */
+/* Charts (Analytics view) — price terms, from the archived run             */
 /* ------------------------------------------------------------------------ */
 
 export const diagramNames = ['Entries by Hour', 'Entries by Weekday', 'Entries by Month', 'Profit / Loss by Hour', 'Profit / Loss by Weekday', 'Profit / Loss by Month', 'MFE vs Profit', 'MAE vs Profit', 'Profit vs Holding Time', 'PnL by Direction', 'Exit Reasons', 'R-Multiple Distribution'];
@@ -209,8 +225,8 @@ export function diagramData(name: string, run: BacktestRun) {
   if (name === 'Exit Reasons') return ['TP', 'SL', 'EOD'].map((d) => ({ label: d, x: 0, v: t.filter((x) => x.reason === d).length, n: t.filter((x) => x.reason === d).length }));
   if (name === 'R-Multiple Distribution') {
     // R is only meaningful when per-trade risk (stop distance x sizing) is
-    // available. The seeded run has no validated sizing, so this is labelled
-    // as a reference, not a measured R.
+    // available. Without a validated sizing model this is a reference multiple,
+    // not a measured R.
     const R = Number(run.strategy.parameters.stopDistance) || 5;
     return t.map((x) => ({ label: `#${x.id}`, x: x.id, v: x.pnl / R, n: 1 }));
   }

@@ -7,7 +7,7 @@
  * Nothing is invented: SL/TP init is marked "Not supplied by run" when the
  * trade carries no SL/TP.
  */
-import { fmt } from './demo';
+import { fmt } from './format';
 import { formatUtcMs } from './utc';
 
 export type TimelineTone = 'signal' | 'entry' | 'tp' | 'sl' | 'eod' | 'neutral';

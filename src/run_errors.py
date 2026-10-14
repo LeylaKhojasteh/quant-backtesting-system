@@ -182,6 +182,13 @@ class DataNotPreparedError(RunError):
     http_status = 400
 
 
+class InvalidMarketRequestError(RunError):
+    """A run-scoped market-data request is incomplete or malformed."""
+
+    code = "invalid_market_request"
+    http_status = 400
+
+
 class RunConflictError(RunError):
     """A real backtest job is already active; only one may run at a time."""
 

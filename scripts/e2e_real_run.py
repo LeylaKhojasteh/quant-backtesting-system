@@ -16,7 +16,9 @@ The repo's frontend public artifacts are snapshotted and restored afterwards.
 """
 
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -42,7 +44,7 @@ from scripts.e2e_run_switch import (  # noqa: E402
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-APP_URL = "http://127.0.0.1:5173/?fixture=demo"
+APP_URL = os.environ.get("QBL_APP_URL", "http://127.0.0.1:5173/?fixture=demo")
 BRIDGE_PORT = 8765
 BRIDGE_URL = f"http://127.0.0.1:{BRIDGE_PORT}"
 PUBLIC = ROOT / "Quant-Backtest-Lab" / "public"
@@ -165,6 +167,11 @@ def main() -> int:
     files_before = set(p.name for p in PUBLIC.glob("runs-*-result.json"))
 
     runs_dir = Path(tempfile.mkdtemp(prefix="qbl-e2e-runs-"))
+    # The app advertises run_0001 from the repo manifest; the bridge must own
+    # that archive too so run-scoped market context (/runs/<id>/candles) resolves.
+    seed = ROOT / "runs" / "run_0001"
+    if seed.is_dir():
+        shutil.copytree(seed, runs_dir / "run_0001")
     bridge = subprocess.Popen(
         [sys.executable, "-m", "src.bridge", "--port", str(BRIDGE_PORT),
          "--runs", str(runs_dir), "--public", str(PUBLIC),

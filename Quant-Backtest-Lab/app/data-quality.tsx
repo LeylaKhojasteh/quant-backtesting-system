@@ -22,6 +22,7 @@ export function DataQualityPanel() {
   const q = run.dataQuality;
   const measured = q.status === 'measured';
   const ticks = q.inRangeTicks;
+  const signals = run.execution?.signalsReceived ?? null;
   const count = (n: number | null | undefined) =>
     n === null || n === undefined ? 'Not measured' : n.toLocaleString('en-US');
 
@@ -31,7 +32,7 @@ export function DataQualityPanel() {
         ['Total Ticks', count(q.totalTicks)],
         ['Ticks in Range', `${count(ticks)} · measured`],
         ['Candles', `${q.candles ?? '—'} · measured`],
-        ['Signals', `${q.candles ?? '—'} · measured`],
+        ['Signals', signals === null ? 'Not available' : `${signals.toLocaleString('en-US')} · from engine`],
         ['Executed Trades', String(run.metrics.trades)],
       ]
     : [

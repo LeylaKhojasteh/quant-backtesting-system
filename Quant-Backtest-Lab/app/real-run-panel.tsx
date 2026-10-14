@@ -413,8 +413,8 @@ export function RealRunPanel() {
       {!connected && (
         <p className="rr-status rr-offline" role="status">
           {bridge.status === 'checking'
-            ? 'Contacting Python engine…'
-            : 'Python engine unavailable — Demo mode still works.'}
+            ? 'Contacting Python Bridge…'
+            : 'Python Bridge Offline — start the bridge to run a real backtest.'}
           {bridge.status === 'unavailable' && (
             <button type="button" className="rr-retry" onClick={refresh}>
               <RefreshCw size={12} /> Retry
@@ -546,7 +546,7 @@ export function RealRunPanel() {
       )}
       {shownNotice && <p className="rr-notice" role="status">{shownNotice}</p>}
 
-      {activeJob && (
+      {jobActive && activeJob && (
         <p className="rr-notice" role="status">
           {activeJob.state === 'stopping' ? 'Stopping the active backtest…' : `Tracking ${activeJob.job_id} · ${activeJob.stage_label}`}
         </p>

@@ -188,7 +188,7 @@ export function RunLibrary() {
           </Tabs>
 
           {!connected && (
-            <p className="lib-status lib-warn" role="status">Python engine unavailable — Run Library needs the bridge.</p>
+            <p className="lib-status lib-warn" role="status">Python Bridge Offline — the Run Library needs the bridge.</p>
           )}
           {notice && <p className="lib-status lib-ok" role="status">{notice}</p>}
           {actionError && (

@@ -56,11 +56,16 @@ class RunConfig:
 
     symbol: str
     timeframe: str
-    start: str  # ISO-8601 UTC, inclusive
-    end: str  # ISO-8601 UTC, inclusive
+    start: str  # ISO-8601 UTC: actual first observed tick (data coverage)
+    end: str  # ISO-8601 UTC: actual last observed tick (data coverage)
     parameters: dict
     data_source: str = ""
     data_fingerprint: str = ""
+    # The user's requested backtest window (distinct from actual tick coverage
+    # above). Optional and additive: absent for legacy runs, in which case the
+    # requested window safely falls back to the observed coverage.
+    requested_start: str = ""
+    requested_end: str = ""
 
 
 @dataclass

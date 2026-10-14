@@ -100,10 +100,13 @@ test('DEMO badge exists in page.tsx', () => {
     assert.ok(charts.includes('Price terms'));
   });
 
-  test('CSV export includes dataMode=seeded-demo and demo in filename', () => {
+  test('CSV export metadata matches the run source (no seeded-demo on real runs)', () => {
     const page = allFiles.get(path.join(appDir, 'page.tsx')) || '';
-    assert.ok(page.includes('dataMode=seeded-demo'));
-    assert.ok(page.includes('demo') && page.includes('.csv'));
+    // Real (archived) exports must not carry seeded/demo metadata.
+    assert.ok(page.includes("dataMode=${archived?'live':'seeded-demo'}"));
+    // The old buggy line hardcoded a second seeded-demo field for every export.
+    assert.ok(!page.includes('`dataMode=seeded-demo`,'));
+    assert.ok(page.includes('.csv'));
   });
 
   test('Report data shows Pending for account-level metrics', () => {
@@ -236,5 +239,180 @@ test('DEMO badge exists in page.tsx', () => {
     assert.ok(events.includes('Not supplied by run'));
     const page = allFiles.get(path.join(appDir, 'page.tsx')) || '';
     assert.ok(page.includes('<TradeTimeline'));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// v1.0.2 — real market visualization & truthfulness (source-level guards)
+// ---------------------------------------------------------------------------
+describe('real market visualization (v1.0.2)', () => {
+  let allFiles;
+  const file = (name) => allFiles.get(path.join(appDir, name)) || '';
+
+  test('setup: read app sources', async () => {
+    allFiles = await readAllTsxFiles();
+    assert.ok(allFiles.size > 0);
+  });
+
+  test('Price Chart candles come from the run API, not the demo fixture', () => {
+    const charts = file('charts.tsx');
+    // The real path must not import candle/tick market data from demo.ts.
+    assert.ok(!/from '\.\/demo'/.test(charts), 'charts.tsx must not import demo market data');
+    assert.ok(charts.includes('candles: Candle[]'), 'CandleChart takes real candles as a prop');
+    assert.ok(charts.includes('Market candles unavailable'), 'explicit unavailable state, no demo fallback');
+    const page = file('page.tsx');
+    assert.ok(page.includes('useRunCandles'), 'page fetches real candles for the run');
+    assert.ok(page.includes('chartCandles'), 'page passes real candles to the chart');
+    assert.ok(page.includes('candles={chartCandles}'), 'CandleChart receives real candles');
+  });
+
+  test('Price Chart markers come from the current BacktestRun', () => {
+    const page = file('page.tsx');
+    assert.ok(page.includes('trades={sourceTrades}'), 'chart markers use loaded run trades');
+    assert.ok(!/<CandleChart[^>]*trades=\{demoTrades\}/.test(page), 'never demo trades in the real chart');
+  });
+
+  test('inspector uses real candle context and real ticks', () => {
+    const page = file('page.tsx');
+    assert.ok(page.includes('tradeCandleWindow'), 'inspector candle window derived from the run timeframe');
+    assert.ok(page.includes('useRunTicks'), 'inspector fetches real ticks');
+    assert.ok(page.includes('candles={insCandles}'), 'inspector candle context is real');
+    assert.ok(page.includes('ticks={insTicks}'), 'tick execution chart gets real ticks');
+    const charts = file('charts.tsx');
+    assert.ok(charts.includes('Execution ticks unavailable'), 'explicit tick unavailable state');
+  });
+
+  test('signalAvailableUtc is preserved and no hardcoded M15 arithmetic remains', () => {
+    const page = file('page.tsx');
+    assert.ok(page.includes('signalAvailable:t.signalAvailableUtc?Date.parse'), 'real signalAvailable mapped from archive');
+    assert.ok(page.includes('trade.signalAvailable!==undefined'), 'summary uses the archived value');
+    assert.ok(!page.includes('trade.signal+900000'), 'no hardcoded 900000 in the inspector');
+    assert.ok(!page.includes('+900000'), 'no hardcoded 15-minute offset anywhere in page.tsx');
+    const charts = file('charts.tsx');
+    assert.ok(!charts.includes('M15_MS'), 'no hardcoded M15 slot constant');
+    assert.ok(!charts.includes('+ M15_MS'), 'no signal + M15 arithmetic');
+  });
+
+  test('timeframe mapping supports M1..H4 (no hidden M15 assumption)', () => {
+    const market = file('run-market.ts');
+    for (const tf of ["'1min': 60_000", "'5min': 300_000", "'15min': 900_000", "'30min': 1_800_000", "'1h': 3_600_000", "'4h': 14_400_000"]) {
+      assert.ok(market.includes(tf), `timeframeMs must map ${tf}`);
+    }
+  });
+
+  test('Data Explorer raw ticks are real (no demo tick generator)', () => {
+    const page = file('page.tsx');
+    assert.ok(page.includes('<RawTickPreview'), 'raw tick preview mounted');
+    assert.ok(/function RawTickPreview\(\{runId,anchor\}/.test(page), 'RawTickPreview is run-scoped');
+    assert.ok(!page.includes('ticks(trades[0]'), 'no demo tick generator in the real path');
+    assert.ok(page.includes('Raw ticks unavailable'), 'explicit unavailable state');
+  });
+
+  test('Signal Quality uses backend signals_received, never a candle count', () => {
+    const analytics = file('analytics.ts');
+    assert.ok(!analytics.includes('totalSignalCount'), 'candle-derived signal count removed');
+    assert.ok(!/candles\.length/.test(analytics), 'no candle-count signal inference');
+    const section = file('analytics-section.tsx');
+    assert.ok(section.includes('run?.execution?.signalsReceived'), 'real backend signal count');
+    assert.ok(!section.includes('run?.dataQuality.candles ?? rows.length'), 'no candle-count fallback');
+  });
+
+  test('fake analytics/report values are gone; N/A instead', () => {
+    const reportData = file('report-data.ts');
+    assert.ok(!reportData.includes('124 ms'), 'fake signal-to-entry delay removed');
+    assert.ok(!reportData.includes('14 / 14'), 'fake fill-check count removed');
+    assert.ok(!reportData.includes('Python not connected'), 'stale engine copy removed');
+    assert.ok(reportData.includes("'N/A'") || reportData.includes('N/A'), 'N/A used for unavailable values');
+    assert.ok(reportData.includes('signalsReceived'), 'execution signal count surfaced');
+  });
+
+  test('stale demo product copy is gone from the real path', () => {
+    const panel = file('real-run-panel.tsx');
+    assert.ok(!panel.includes('Demo mode still works'), 'stale fallback copy removed');
+    assert.ok(panel.includes('Python Bridge Offline'), 'honest offline state');
+    const quality = file('data-quality.tsx');
+    assert.ok(quality.includes('run.execution?.signalsReceived'), 'signals from engine metadata');
+  });
+
+  test('normal real path does not source market data from demo.ts', () => {
+    // Real-run components must not import market/execution generators from demo.
+    for (const name of ['charts.tsx', 'analytics-section.tsx', 'report.tsx', 'report-data.ts', 'trade-explorer.tsx', 'trade-timeline.tsx', 'metrics-bar.tsx', 'excursion.tsx', 'event-ribbon.tsx']) {
+      const src = file(name);
+      assert.ok(!/from '\.\/demo'/.test(src), `${name} must not import demo.ts`);
+    }
+    // page.tsx may import the fixture only for the explicit ?fixture=demo path.
+    const page = file('page.tsx');
+    assert.ok(page.includes("from './strategy-definitions'"), 'neutral helpers moved out of demo');
+    assert.ok(page.includes('trades as demoTrades'), 'demo trades aliased as fixture-only');
+  });
+
+  test('demo fixture stays isolated behind the explicit ?fixture=demo hook', () => {
+    const runner = file('runner.ts');
+    assert.ok(runner.includes('fixture') || runner.includes('seedTrades'), 'fixture builder retained');
+    const ctx = file('run-context.tsx');
+    assert.ok(ctx.includes("get('fixture')"), 'fixture gated by explicit test hook');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// v1.0.2 QA fixes — blank chart, run range display, stale job, PnL labels
+// ---------------------------------------------------------------------------
+describe('post-QA fixes (v1.0.2)', () => {
+  let allFiles;
+  const file = (name) => allFiles.get(path.join(appDir, name)) || '';
+
+  test('setup: read app sources', async () => {
+    allFiles = await readAllTsxFiles();
+    assert.ok(allFiles.size > 0);
+  });
+
+  test('chart size is measured by a callback ref (blank-chart fix)', () => {
+    const charts = file('charts.tsx');
+    // Object ref + []-dep effect captured the null loading render and never
+    // observed the svg, leaving real runs blank. Guard the callback-ref form.
+    assert.ok(/useCallback\(\s*\(el: SVGSVGElement \| null\)/.test(charts),
+      'useElementSize must use a callback ref');
+    assert.ok(!/const ref = useRef<SVGSVGElement \| null>\(null\)/.test(charts),
+      'object svg ref must be gone');
+    assert.ok(charts.includes('observerRef.current.disconnect()'), 'observer re-attached/detached with the node');
+  });
+
+  test('results header shows the requested range and a timeframe label', () => {
+    const page = file('page.tsx');
+    assert.ok(page.includes('utcDateRange(runData.dateRange.startUtc,runData.dateRange.endUtc)'),
+      'header uses the requested range');
+    assert.ok(page.includes('timeframeLabel(runData.instrument.timeframe)'), 'display timeframe label (H1)');
+    assert.ok(page.includes('Observed coverage'), 'observed coverage shown separately');
+    assert.ok(page.includes('Requested range'), 'requested range labelled distinctly');
+    const fmt = file('format.ts');
+    assert.ok(fmt.includes('utcDateRange') && fmt.includes('timeframeLabel'));
+    assert.ok(fmt.includes("'1h': 'H1'"), 'H1 label mapping present');
+  });
+
+  test('requested range and observed coverage are separate contracts', () => {
+    const py = file('python-result.ts');
+    assert.ok(py.includes('requested_start || payload.config.start'), 'requested falls back to observed');
+    assert.ok(py.includes('dataCoverage'), 'observed coverage mapped separately');
+    const schema = file('schema.ts');
+    assert.ok(schema.includes('dataCoverage'), 'dataCoverage in the run schema');
+  });
+
+  test('PnL x-axis thins labels but keeps every data point', () => {
+    const charts = file('charts.tsx');
+    assert.ok(charts.includes('showLabel'), 'label thinning present');
+    assert.ok(charts.includes('stride'), 'stride-based label thinning');
+    // The data-point circle is rendered unconditionally inside the map.
+    assert.ok(/<circle cx=\{x\(i\)\} cy=\{y\(v\)\}/.test(charts), 'all points still drawn');
+    assert.ok(/showLabel && \(\s*<text/.test(charts), 'only labels are gated');
+  });
+
+  test('sidebar tracking notice only shows while a job is active', () => {
+    const panel = file('real-run-panel.tsx');
+    assert.ok(panel.includes('{jobActive && activeJob && ('), 'tracking notice gated on active state');
+    assert.ok(panel.includes('Tracking '), 'tracking text retained for active jobs');
+    const ctx = file('run-job-context.tsx');
+    // Terminal states are never "active".
+    assert.ok(ctx.includes("new Set(['completed', 'failed', 'stopped'])"), 'terminal states set');
+    assert.ok(ctx.includes('ACTIVE_STATES.has(job.state)'), 'active derived from active states only');
   });
 });

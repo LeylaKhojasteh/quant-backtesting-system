@@ -19,6 +19,8 @@ Endpoints::
     POST /run-jobs/<job_id>/stop -> stop the worker; bridge and UI stay alive
     GET  /runs                  -> Run Library summaries (published + local)
     GET  /runs/<run_id>         -> run detail + archived configuration
+    GET  /runs/<run_id>/candles -> bounded real candle window (run market context)
+    GET  /runs/<run_id>/ticks   -> bounded real BID/ASK tick window (run market context)
     GET  /runs/<run_id>/report  -> the run's standalone report.html
     GET  /optimizations         -> optimization study history
     GET  /optimizations/<id>    -> a saved study (ranked results)
@@ -64,6 +66,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src import config  # noqa: E402
 from src import run_errors  # noqa: E402
 from src import optimization, run_backtest, run_comparison, run_jobs, run_library, run_request  # noqa: E402
+from src import run_market  # noqa: E402
 from src import walk_forward  # noqa: E402
 from src import accounting  # noqa: E402
 from src import monte_carlo  # noqa: E402
@@ -361,6 +364,25 @@ class BridgeHandler(BaseHTTPRequestHandler):
             elif len(parts) == 2 and parts[0] == "runs":
                 self._send_json(200, {"run": run_library.run_detail(
                     self._config["runs"], unquote(parts[1]), self._config["public"])})
+            elif len(parts) == 3 and parts[0] == "runs" and parts[2] == "candles":
+                query = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+                self._send_json(200, run_market.run_candles(
+                    self._config["runs"], unquote(parts[1]), self._config["public"],
+                    start=(query.get("start") or [None])[0],
+                    end=(query.get("end") or [None])[0],
+                    limit=int((query.get("limit") or [run_market.DEFAULT_CANDLE_LIMIT])[0]),
+                ))
+            elif len(parts) == 3 and parts[0] == "runs" and parts[2] == "ticks":
+                query = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+                self._send_json(200, run_market.run_ticks(
+                    self._config["runs"], unquote(parts[1]), self._config["public"],
+                    start=(query.get("start") or [None])[0],
+                    end=(query.get("end") or [None])[0],
+                    around=(query.get("around") or [None])[0],
+                    before_ms=int((query.get("before_ms") or [run_market.DEFAULT_TICK_BEFORE_MS])[0]),
+                    after_ms=int((query.get("after_ms") or [run_market.DEFAULT_TICK_AFTER_MS])[0]),
+                    limit=int((query.get("limit") or [run_market.DEFAULT_TICK_LIMIT])[0]),
+                ))
             elif len(parts) == 3 and parts[0] == "runs" and parts[2] == "report":
                 path = run_library.report_path(self._config["runs"], unquote(parts[1]))
                 self._send_bytes(200, path.read_bytes(), "text/html; charset=utf-8")

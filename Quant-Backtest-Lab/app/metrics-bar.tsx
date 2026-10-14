@@ -2,7 +2,7 @@
 
 import { Info } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { fmt } from './demo';
+import { fmt } from './format';
 import { useRun } from './run-context';
 import { accountDrawdown } from './analytics';
 import { PendingMetric } from './pending-metric';

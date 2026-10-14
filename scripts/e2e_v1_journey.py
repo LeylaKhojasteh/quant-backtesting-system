@@ -6,6 +6,7 @@ library, account-enabled run (balance), and the research workspace tabs.
 """
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -25,7 +26,7 @@ from scripts.e2e_run_switch import (  # noqa: E402
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-APP = "http://127.0.0.1:5173/"
+APP = os.environ.get("QBL_APP_URL", "http://127.0.0.1:5173/")
 BRIDGE = "http://127.0.0.1:8765"
 PUBLIC = ROOT / "Quant-Backtest-Lab" / "public"
 MANIFEST = PUBLIC / "adapters-run-manifest.json"
@@ -105,7 +106,7 @@ def main() -> int:
         cdp.call("Emulation.setDeviceMetricsOverride", {"width": 1440, "height": 900, "deviceScaleFactor": 1, "mobile": False})
         time.sleep(0.8)
 
-        ok &= check("version v1.0.1 shown", "v1.0.1" in (cdp.evaluate(f"({TEXT_JS})('.engine')") or ""))
+        ok &= check("version v1.0.2 shown", "v1.0.2" in (cdp.evaluate(f"({TEXT_JS})('.engine')") or ""))
         ok &= check("logical dataset shown", "XAUUSD · Dukascopy" in (cdp.evaluate(f"({TEXT_JS})('[aria-label=\"Real run dataset\"]')") or ""))
         ok &= check("symbol derived XAUUSD", (cdp.evaluate(f"({TEXT_JS})('[aria-label=\"Run symbol\"]')") or "").strip() == "XAUUSD")
         ok &= check("timeframe controlled", cdp.evaluate("!!document.querySelector('button[aria-label=\"Run timeframe\"]')"))

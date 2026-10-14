@@ -1143,6 +1143,142 @@ def load_candles_frame(
     return frame.set_index("timestamp")[["open", "high", "low", "close"]]
 
 
+#: Hard ceilings for product visualization reads (never a full-year dump).
+MAX_CANDLE_WINDOW = 1500
+MAX_TICK_WINDOW = 5000
+
+
+def load_candles_window(
+    source: str,
+    *,
+    timeframe: str,
+    symbol: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    limit: int = 800,
+    root: str | Path | None = None,
+) -> pd.DataFrame:
+    """Bounded real candle window (BID + ASK OHLC) for visualization.
+
+    Returns at most ``limit`` candles (never more than ``MAX_CANDLE_WINDOW``),
+    chronological, restricted to ``[start, end)``. Identical values to the
+    canonical candle cache — the same source the engine's strategy frame uses.
+    This is a read-only projection: no resampling, no gap filling, no synthesis.
+    """
+    root = DEFAULT_CACHE_ROOT if root is None else root
+    if timeframe not in SUPPORTED_CANDLE_TIMEFRAMES:
+        raise DataEngineError(f"unsupported candle timeframe: {timeframe}")
+    cap = max(1, min(int(limit), MAX_CANDLE_WINDOW))
+    ds = _resolve_dataset(source, symbol=symbol, root=root)
+    start_ts, end_exclusive = resolve_range(start, end)
+    months = _months_between(start_ts, end_exclusive, ds.get("months", []))
+    if not months:
+        raise CoverageError(f"requested range {start}..{end} is outside cached coverage")
+    frames = []
+    for label in months:
+        year, month = (int(x) for x in label.split("-"))
+        pid = PartitionId(ds["provider"], ds["symbol"], year, month)
+        parquet = candle_partition_parquet(root, pid, timeframe)
+        if not parquet.is_file():
+            raise PartitionMissingError(
+                f"candle cache not prepared for {ds['symbol']} {timeframe} {label}; "
+                f"run `build-candles` first")
+        frames.append(pq.read_table(parquet, columns=list(CANDLE_COLUMNS)).to_pandas())
+    frame = pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
+    if start_ts is not None:
+        frame = frame[frame["timestamp"] >= start_ts]
+    if end_exclusive is not None:
+        frame = frame[frame["timestamp"] < end_exclusive]
+    frame = frame.sort_values("timestamp", kind="stable")
+    # Cap to the most recent `cap` candles inside the window (bounded response).
+    if len(frame) > cap:
+        frame = frame.iloc[-cap:]
+    frame = frame.reset_index(drop=True)
+    if frame.empty:
+        raise CoverageError(f"no cached candles for {source} {timeframe} in {start}..{end}")
+    return frame
+
+
+def _row_groups_in_range(pf, start_ts: pd.Timestamp | None,
+                         end_exclusive: pd.Timestamp | None) -> list[int]:
+    """Row-group indices whose timestamp statistics overlap ``[start, end)``."""
+    meta = pf.metadata
+    ts_index = 0  # timestamp is written first in ARROW_SCHEMA
+    selected = []
+    for rg in range(meta.num_row_groups):
+        stats = meta.row_group(rg).column(ts_index).statistics
+        if stats is None or not stats.has_min_max:
+            selected.append(rg)
+            continue
+        rg_min = pd.Timestamp(stats.min).tz_localize("UTC") if pd.Timestamp(stats.min).tz is None else pd.Timestamp(stats.min)
+        rg_max = pd.Timestamp(stats.max).tz_localize("UTC") if pd.Timestamp(stats.max).tz is None else pd.Timestamp(stats.max)
+        if start_ts is not None and rg_max < start_ts:
+            continue
+        if end_exclusive is not None and rg_min >= end_exclusive:
+            continue
+        selected.append(rg)
+    return selected
+
+
+def load_ticks_window(
+    source: str,
+    *,
+    symbol: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    limit: int = 500,
+    root: str | Path | None = None,
+) -> pd.DataFrame:
+    """Bounded real BID/ASK tick window for execution visualization.
+
+    Row-group pruned: only partitions/row groups whose timestamp statistics
+    overlap ``[start, end)`` are read, and reading stops once ``limit`` rows
+    (max ``MAX_TICK_WINDOW``) have been collected. Returns canonical
+    ``timestamp, bid, ask`` (+ volumes) ordered chronologically — the exact
+    cached ticks, never synthesized.
+    """
+    root = DEFAULT_CACHE_ROOT if root is None else root
+    cap = max(1, min(int(limit), MAX_TICK_WINDOW))
+    ds = _resolve_dataset(source, symbol=symbol, root=root)
+    start_ts, end_exclusive = resolve_range(start, end)
+    months = _months_between(start_ts, end_exclusive, ds.get("months", []))
+    if not months:
+        raise CoverageError(f"requested range {start}..{end} is outside cached coverage")
+    cols = ["timestamp", "bid", "ask", "bid_volume", "ask_volume"]
+    collected = []
+    total = 0
+    for label in months:
+        year, month = (int(x) for x in label.split("-"))
+        pid = PartitionId(ds["provider"], ds["symbol"], year, month)
+        parquet = partition_parquet(root, pid)
+        if not parquet.is_file():
+            raise PartitionMissingError(f"required partition missing: {pid.label}")
+        pf = pq.ParquetFile(parquet)
+        for rg in _row_groups_in_range(pf, start_ts, end_exclusive):
+            table = pf.read_row_group(rg, columns=cols)
+            sub = table.to_pandas()
+            if start_ts is not None:
+                sub = sub[sub["timestamp"] >= start_ts]
+            if end_exclusive is not None:
+                sub = sub[sub["timestamp"] < end_exclusive]
+            if len(sub):
+                collected.append(sub)
+                total += len(sub)
+            if total >= cap:
+                break
+        if total >= cap:
+            break
+    if not collected:
+        raise CoverageError(f"no cached ticks in {source} for {start}..{end}")
+    frame = pd.concat(collected, ignore_index=True) if len(collected) > 1 else collected[0]
+    if not frame["timestamp"].is_monotonic_increasing:
+        frame = frame.sort_values("timestamp", kind="stable")
+    frame = frame.reset_index(drop=True)
+    if len(frame) > cap:
+        frame = frame.iloc[:cap].reset_index(drop=True)
+    return frame
+
+
 def prepared_timeframes(source: str, *, symbol: str | None = None,
                         root: str | Path = DEFAULT_CACHE_ROOT) -> list[str]:
     ds = _resolve_dataset(source, symbol=symbol, root=root)

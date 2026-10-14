@@ -186,14 +186,29 @@ export const MetricsSchema = z.object({
 });
 export type Metrics = z.infer<typeof MetricsSchema>;
 
+export const ExecutionSummarySchema = z.object({
+  /** Real backend signal accounting (execution.signals_* in result.json). */
+  signalsReceived: z.number().int().nonnegative().nullish(),
+  signalsExecuted: z.number().int().nonnegative().nullish(),
+  signalsIgnored: z.number().int().nonnegative().nullish(),
+  engine: z.string().nullish(),
+  startedAtUtc: z.string().nullish(),
+  finishedAtUtc: z.string().nullish(),
+});
+export type ExecutionSummary = z.infer<typeof ExecutionSummarySchema>;
+
 export const BacktestRunSchema = z.object({
   runId: RunIdSchema,
   runTimestampUtc: z.string().datetime({ offset: false }),
   dataMode: z.enum(DATA_MODE),
   strategy: StrategySchema,
   instrument: InstrumentSchema,
-  /** ISO-8601 UTC boundaries, inclusive. */
+  /** Requested backtest window, ISO-8601 UTC. Authoritative for display. */
   dateRange: z.object({ startUtc: z.string().datetime({ offset: false }), endUtc: z.string().datetime({ offset: false }) }),
+  /** Actual first/last observed tick coverage (may differ from the requested range). */
+  dataCoverage: z
+    .object({ startUtc: z.string().datetime({ offset: false }), endUtc: z.string().datetime({ offset: false }) })
+    .optional(),
   dataSource: DataSourceSchema,
   dataQuality: DataQualitySchema,
   account: AccountSchema,
@@ -201,6 +216,8 @@ export const BacktestRunSchema = z.object({
   /** Ordered by exit time. Always length >= trades.length (one point per exit). */
   equity: z.array(EquityPointSchema),
   metrics: MetricsSchema,
+  /** Real engine execution/signal accounting. Absent for seeded fixture runs. */
+  execution: ExecutionSummarySchema.optional(),
   /** Non-fatal notes surfaced to the user, e.g. "demo data — not measured". */
   warnings: z.array(z.string()).default([]),
   /** Explicit limitations so nothing is overstated. */

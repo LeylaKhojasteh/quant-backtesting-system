@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Minus, Plus, RotateCcw } from 'lucide-react';
-import { candles, fmt, time, ticks, tradePath, trades, type Candle, type Trade } from './demo';
+import { fmt, time } from './format';
+import type { Candle, TickPoint, Trade } from './types';
 import { excursions } from './analytics';
 import { useRun } from './run-context';
 import { formatUtcMs } from './utc';
@@ -12,8 +13,6 @@ const green = 'var(--success)';
 const red = 'var(--danger)';
 const blue = 'var(--primary)';
 
-const M15_MS = 900000;
-
 /**
  * Measures the host SVG so charts can be drawn in real pixels.
  * That keeps text and strokes undistorted and lets a chart fill its panel exactly.
@@ -21,11 +20,19 @@ const M15_MS = 900000;
  * client markup always match and hydration never mismatches.
  */
 function useElementSize() {
-  const ref = useRef<SVGSVGElement | null>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
+  const observerRef = useRef<ResizeObserver | null>(null);
 
-  useEffect(() => {
-    const el = ref.current;
+  // Callback ref: runs whenever the node attaches OR detaches, including the
+  // loading -> ready transition where the chart <svg> mounts only after the
+  // market data arrives. An object ref with a `[]`-dep effect captured the
+  // null first render and never observed the real node, which left real runs
+  // (e.g. a multi-month H1 window) with a measured size of 0 and a blank chart.
+  const ref = useCallback((el: SVGSVGElement | null) => {
+    if (observerRef.current) {
+      observerRef.current.disconnect();
+      observerRef.current = null;
+    }
     if (!el) return;
     const measure = () => {
       const box = el.getBoundingClientRect();
@@ -36,17 +43,30 @@ function useElementSize() {
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(el);
-    return () => observer.disconnect();
+    observerRef.current = observer;
   }, []);
+
+  useEffect(() => () => observerRef.current?.disconnect(), []);
 
   return { ref, width: size.w, height: size.h, ready: size.w > 40 && size.h > 40 };
 }
 
-/** Candle index for a timestamp, or null when that time is outside the visible range. */
+/**
+ * Candle index for a timestamp, or null when that time is outside the visible
+ * range. Timeframe-agnostic: it binary-searches the real candle timestamps, so
+ * M1/M5/M15/M30/H1/H4 all map correctly (no fixed 15-minute assumption).
+ */
 function candleIndexAt(data: Candle[], t: number) {
   if (!data.length) return null;
-  const i = Math.floor((t - data[0].t) / M15_MS);
-  return i >= 0 && i < data.length ? i : null;
+  if (t < data[0].t || t > data[data.length - 1].t) return null;
+  let lo = 0;
+  let hi = data.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (data[mid].t <= t) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -105,14 +125,22 @@ export function PriceChartLegend({ overlay }: { overlay?: string }) {
 }
 
 export function CandleChart({
+  candles,
+  trades,
   context,
   trade,
   overlay = 'Signals + Trades',
+  status = 'ready',
   onSelect,
 }: {
+  /** Real BID candles from the run's market context (never synthesized). */
+  candles: Candle[];
+  /** Real trades of the loaded run (never the demo fixture). */
+  trades: Trade[];
   context?: boolean;
   trade?: Trade;
   overlay?: string;
+  status?: 'idle' | 'loading' | 'ready' | 'unavailable';
   onSelect?: (i: number) => void;
 }) {
   const [zoom, setZoom] = useState(1);
@@ -137,23 +165,30 @@ export function CandleChart({
     return () => node.removeEventListener('wheel', onWheel);
   }, []);
 
-  const base: Candle[] = context && trade
-    ? Array.from({ length: 18 }, (_, i) => {
-        const t = trade.signal + (i - 3) * M15_MS;
-        const ratio = Math.max(0, Math.min(1, (t - trade.entryTime) / (trade.exitTime - trade.entryTime)));
-        const mid =
-          trade.entry +
-          (trade.exit - trade.entry) * ratio +
-          (t < trade.entryTime ? Math.sin(i) * 0.7 : Math.sin(i * 1.3) * 0.3);
-        const o = mid + 0.35 * Math.sin(i * 2);
-        const c = mid + 0.3 * Math.cos(i * 2);
-        return { t, o, c, h: Math.max(o, c) + 0.3, l: Math.min(o, c) - 0.3 };
-      })
-    : candles;
+  // Zoom/pan are clamped to the current candle range during render (see
+  // `count`/`start` below), so a run switch cannot leave them out of bounds and
+  // no reset effect is needed here.
+  const base: Candle[] = candles;
+
+  if (status !== 'ready' || !base.length) {
+    return (
+      <div className="chart-wrap" ref={hostRef}>
+        <div className="equity-empty">
+          <h3>Market candles unavailable</h3>
+          <p>
+            {status === 'loading'
+              ? 'Loading real candles for this run…'
+              : 'No real candles are available for this run window. Metrics and trades are unaffected.'}
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   const count = Math.max(6, Math.round(base.length / zoom));
   const start = clamp(pan, 0, Math.max(0, base.length - count));
   const data = base.slice(start, start + count);
+
 
   const levels =
     trade && context
@@ -344,8 +379,7 @@ export function CandleChart({
     );
   };
 
-  const overlays = (context && trade ? [trade] : trades).flatMap((t) => {
-    const showSignals = context || overlay.includes('Signals');
+  const overlays = (context && trade ? [trade] : trades).flatMap((t) => {    const showSignals = context || overlay.includes('Signals');
     const showTrades = context || overlay.includes('Trades');
     const entryIdx = candleIndexAt(data, t.entryTime);
     const nodes: React.ReactNode[] = [];
@@ -368,7 +402,9 @@ export function CandleChart({
 
     if (context && t.signal !== undefined) {
       const shadeIdx = candleIndexAt(data, t.signal);
-      const availIdx = candleIndexAt(data, t.signal + M15_MS);
+      // Real signal-availability time (archived). Never reconstructed from a
+      // fixed timeframe; if it is unknown, the marker is simply not drawn.
+      const availIdx = t.signalAvailable !== undefined ? candleIndexAt(data, t.signalAvailable) : null;
       if (shadeIdx !== null) {
         nodes.push(
           <rect
@@ -529,16 +565,56 @@ export function CandleChart({
   );
 }
 
-export function TickChart({ trade, view, excursionAvailable = true }: { trade: Trade; view: string; excursionAvailable?: boolean }) {
+export function TickChart({
+  trade,
+  ticks,
+  view,
+  status = 'ready',
+  excursionAvailable = false,
+}: {
+  trade: Trade;
+  /** Real BID/ASK ticks from the run's market context (never synthesized). */
+  ticks: TickPoint[];
+  view: string;
+  status?: 'idle' | 'loading' | 'ready' | 'unavailable';
+  excursionAvailable?: boolean;
+}) {
   const [hover, setHover] = useState<number | null>(null);
   const { ref, width, height, ready } = useElementSize();
 
   const full = view === 'Full Trade';
   const exit = view === 'Exit Window';
 
-  const arr = full
-    ? tradePath(trade)
-    : ticks(trade, exit ? 'exit' : 'entry', 30);
+  const arr = ticks;
+  const nearestIdx = (t: number) => {
+    if (!arr.length) return 0;
+    let best = 0;
+    let bestDelta = Infinity;
+    for (let i = 0; i < arr.length; i += 1) {
+      const d = Math.abs(arr[i].t - t);
+      if (d < bestDelta) {
+        bestDelta = d;
+        best = i;
+      }
+    }
+    return best;
+  };
+  const anchor = nearestIdx(exit ? trade.exitTime : trade.entryTime);
+
+  if (status !== 'ready' || !arr.length) {
+    return (
+      <div className="tick-chart">
+        <div className="equity-empty">
+          <h3>Execution ticks unavailable</h3>
+          <p>
+            {status === 'loading'
+              ? 'Loading real BID/ASK ticks for this trade…'
+              : 'No real ticks are cached for this trade window. No synthetic path is shown.'}
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   const levels = full || exit ? [trade.entry, trade.sl, trade.tp] : [trade.entry];
   const lo = Math.min(...arr.map((a) => a.bid), ...levels) - 0.25;
@@ -549,7 +625,6 @@ export function TickChart({ trade, view, excursionAvailable = true }: { trade: T
   const plotH = Math.max(40, height - pad.t - pad.b);
   const y = (v: number) => pad.t + ((hi - v) / (hi - lo || 1)) * plotH;
   const x = (i: number) => pad.l + (i / Math.max(1, arr.length - 1)) * plotW;
-  const anchor = full ? 0 : 30;
 
   return (
     <div className="tick-chart">
@@ -621,18 +696,19 @@ export function TickChart({ trade, view, excursionAvailable = true }: { trade: T
             {full && (
               <>
                 <line
-                  x1={x(80)}
-                  x2={x(80)}
+                  x1={x(arr.length - 1)}
+                  x2={x(arr.length - 1)}
                   y1={pad.t}
                   y2={pad.t + plotH}
                   stroke={red}
                   strokeDasharray="3 3"
                 />
-                <text x={x(80) - 26} y={pad.t - 9} style={{ fill: red, fontSize: 10 }}>Exit</text>
+                <text x={x(arr.length - 1) - 26} y={pad.t - 9} style={{ fill: red, fontSize: 10 }}>Exit</text>
               </>
             )}
 
-            {/* MAE / MFE extremes on the seeded replay path (demo runs only) */}
+            {/* MAE / MFE come only from a seeded replay path; real runs do not
+                supply observed excursions yet, so nothing is drawn for them. */}
             {full && excursionAvailable && (() => {
               const ex = excursions(trade);
               const idxOf = (ms: number) =>
@@ -695,10 +771,9 @@ export function TickChart({ trade, view, excursionAvailable = true }: { trade: T
         <span className="chart-hint">
           {full ? (excursionAvailable
             ? 'Sampled replay · MAE / MFE derived from this path'
-            : 'MAE / MFE not supplied by this run') : '±30 seconds · UTC'}
+            : 'MAE / MFE not supplied by this run') : 'Real cached ticks · UTC'}
         </span>
       </div>
-      {full && <p className="demo-note">Seeded visualization only; no execution engine runs in this prototype.</p>}
     </div>
   );
 }
@@ -814,21 +889,30 @@ export function Equity({ mode }: { mode: string }) {
             <path d={area} fill={accent} opacity=".09" />
             <path d={path} stroke={accent} strokeWidth="1.8" fill="none" />
 
-            {primary.map((v, i) => (
-              <g key={i} onPointerEnter={() => setHover(i)}>
-                <rect
-                  x={x(i) - Math.max(6, plotW / pnl.length / 2)}
-                  y={pad.t}
-                  width={Math.max(12, plotW / pnl.length)}
-                  height={plotH}
-                  fill="transparent"
-                />
-                <circle cx={x(i)} cy={y(v)} r={hover === i ? 4.5 : 2.4} fill={accent} />
-                <text x={x(i)} y={pad.t + plotH + 17} textAnchor="middle" style={{ fontSize: 10 }}>
-                  {i + 1}
-                </text>
-              </g>
-            ))}
+            {primary.map((v, i) => {
+              // Keep every data point (hit area + dot); only thin the X-axis
+              // trade-number labels to a readable count (~6-10 by width).
+              const maxLabels = Math.max(6, Math.min(10, Math.floor(plotW / 60)));
+              const stride = Math.max(1, Math.ceil(primary.length / maxLabels));
+              const showLabel = i === 0 || i === primary.length - 1 || i % stride === 0;
+              return (
+                <g key={i} onPointerEnter={() => setHover(i)}>
+                  <rect
+                    x={x(i) - Math.max(6, plotW / pnl.length / 2)}
+                    y={pad.t}
+                    width={Math.max(12, plotW / pnl.length)}
+                    height={plotH}
+                    fill="transparent"
+                  />
+                  <circle cx={x(i)} cy={y(v)} r={hover === i ? 4.5 : 2.4} fill={accent} />
+                  {showLabel && (
+                    <text x={x(i)} y={pad.t + plotH + 17} textAnchor="middle" style={{ fontSize: 10 }}>
+                      {i + 1}
+                    </text>
+                  )}
+                </g>
+              );
+            })}
 
             {hover !== null && hover < primary.length && (
               <text x={pad.l} y={pad.t - 4} style={{ fontSize: 11 }}>

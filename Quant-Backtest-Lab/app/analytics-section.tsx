@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AreaChart, BarChart3, LineChart, PieChart, TrendingUp } from 'lucide-react';
-import { fmt } from './demo';
+import { fmt } from './format';
 import {
   advancedPerformance,
   directionStats,
@@ -467,18 +467,19 @@ export function DrawdownQuality({ rows }: { rows: readonly EnrichedTrade[] }) {
 }
 
 /** How many strategy signals converted into executed trades. */
-export function SignalQuality({ rows, totalSignals }: { rows: readonly EnrichedTrade[]; totalSignals?: number }) {
+export function SignalQuality({ rows, totalSignals }: { rows: readonly EnrichedTrade[]; totalSignals: number | null }) {
   const s = useMemo(() => signalAnalysis(rows, totalSignals), [rows, totalSignals]);
-  const pct = (v: number) => (s.totalSignals ? ((v / s.totalSignals) * 100).toFixed(2) : '0.00');
+  const pct = (v: number) => (s.totalSignals ? ((v / s.totalSignals) * 100).toFixed(2) : 'N/A');
+  const na = 'N/A';
   return (
     <StatGrid
       title="Signal Execution"
-      note="one signal per M15 candle · seeded"
+      note="from the run's archived execution metadata"
       items={[
-        { label: 'Total Signals', value: String(s.totalSignals), note: `100.00% · ${pct(s.totalSignals)}% of signals` },
-        { label: 'Executed Signals', value: String(s.executed), note: `${pct(s.executed)}% of signals became trades`, tone: 'good' },
-        { label: 'Ignored Signals', value: String(s.ignored), note: `${pct(s.ignored)}% had no qualifying entry` },
-        { label: 'Execution Rate', value: `${s.executionRatePct.toFixed(2)}%`, note: 'Executed signals divided by total signals', tone: 'good' },
+        { label: 'Total Signals', value: s.totalSignals === null ? na : String(s.totalSignals), note: s.totalSignals === null ? 'Signal count not archived for this run' : '100.00% · signals received by the engine' },
+        { label: 'Executed Signals', value: String(s.executed), note: s.totalSignals === null ? 'Trades executed by the engine' : `${pct(s.executed)}% of signals became trades`, tone: 'good' },
+        { label: 'Ignored Signals', value: s.ignored === null ? na : String(s.ignored), note: s.ignored === null ? 'Not derivable without a signal count' : `${pct(s.ignored)}% had no qualifying entry` },
+        { label: 'Execution Rate', value: s.executionRatePct === null ? na : `${s.executionRatePct.toFixed(2)}%`, note: 'Executed signals divided by total signals', tone: 'good' },
       ]}
     />
   );
@@ -568,7 +569,7 @@ export function ResearchAnalytics({ group = 'all' }: { group?: string }) {
   const state = useRun();
   const run = state.status === 'ready' ? state.run : null;
   const rows = useMemo(() => run ? enrichRunTrades(run) : [], [run]);
-  const totalSignals = run?.dataQuality.candles ?? rows.length;
+  const totalSignals = run?.execution?.signalsReceived ?? null;
   const p = useMemo(() => rows.length ? performance(rows) : { expectancy: 0, payoff: 0 }, [rows]);
   const r = useMemo(() => rows.length ? risk(rows) : { maxLosingStreak: 0, recoveryFactor: 0 }, [rows]);
   const show = (g: string) => group === 'all' || group === g;

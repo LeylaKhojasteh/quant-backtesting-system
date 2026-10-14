@@ -5,14 +5,14 @@ import {Tabs,TabsList,TabsTrigger} from '@/components/ui/tabs';
 import {Select,SelectContent,SelectItem,SelectTrigger,SelectValue} from '@/components/ui/select';
 import {Tooltip,TooltipProvider,TooltipTrigger,TooltipContent} from '@/components/ui/tooltip';
 import {reportGroups,diagramNames,diagramData,reportContext,headline,headlineIsPending,type ReportMetric} from './report-data';
-import {fmt} from './demo';
+import {fmt} from './format';
 import {useRun,type RunState} from './run-context';
 import {PendingMetric} from './pending-metric';
 
 type DiagramPoint={label:string;x:number;v:number;n:number;positive?:number;negative?:number};
 
 function ReportState({state}:{state:RunState}){
- if(state.status==='loading')return <div className="report-workspace"><div className="panel"><div className="panel-head"><h2><FileBarChart/>Backtest Summary</h2></div><p className="report-note">Loading the seeded reference run…</p></div></div>;
+ if(state.status==='loading')return <div className="report-workspace"><div className="panel"><div className="panel-head"><h2><FileBarChart/>Backtest Summary</h2></div><p className="report-note">Loading the run result…</p></div></div>;
  return <div className="report-workspace"><div className="panel"><div className="panel-head"><h2><FileBarChart/>Backtest Summary</h2></div><p className="report-note" role="alert"><Info size={13}/>{state.status==='error'?state.error:state.status==='malformed'?state.message:'Unknown state'}</p></div></div>;
 }
 
@@ -57,7 +57,7 @@ export function FullReport(){
      </div>)}</dl>
     </TooltipProvider>
    </div>)}</div>
-  <p className="report-note"><Info size={12}/>Pending fields are listed for report completeness. Account currency, lot sizing, equity, margin and statistical definitions are not supplied by the engine; no account numbers are shown for the seeded demo.</p>
+  <p className="report-note"><Info size={12}/>Pending fields are listed for report completeness. Account currency, lot sizing, equity, margin and statistical definitions are not supplied by the engine; no account numbers are shown{run.dataMode==='seeded-demo'?' for this fixture':''}.</p>
  </section>
  </div>;
 }
@@ -68,6 +68,7 @@ export function Analytics(){
  const [hover,setHover]=useState<number|null>(null);
  if(state.status!=='ready')return <ReportState state={state}/>;
  const run=state.run;
+ const demo=run.dataMode==='seeded-demo';
  const data=diagramData(name,run) as DiagramPoint[];
  const scatter=name==='Profit vs Holding Time';
  const multi=name.startsWith('Profit / Loss');
@@ -85,8 +86,8 @@ const m=run.metrics;
  <div className="analysis-kpis">{[
   ['Payoff Ratio',m.payoff===null?'Pending':fmt(payoff),'Average win / average loss · price terms'],
   ['Average R',`${fmt(avgR)}R`,`PnL / ${stopDist} reference stop · price terms · sizing not validated`],
-  ['Time in Market',exposure.toFixed(1)+'%','Sum of holding time / 22h seeded window'],
-  ['Average Entry Spread',m.avgSpreadIn===null||m.avgSpreadIn===undefined?'Pending':fmt(avgSpreadIn),'Observed seeded entry ticks · price terms'],
+  ['Time in Market',exposure.toFixed(1)+'%','Sum of holding time / run window'],
+  ['Average Entry Spread',m.avgSpreadIn===null||m.avgSpreadIn===undefined?'Pending':fmt(avgSpreadIn),'Observed entry ticks · price terms'],
  ].map(([l,v,n])=><div key={l}><span>{l}</span><strong>{v}</strong><small>{n}</small></div>)}</div>
  <section className="analytics-chart panel">
  <div className="panel-head">
@@ -101,10 +102,10 @@ const m=run.metrics;
  </div>{!data.length?<div className="analytics-empty"><BarChart3 size={28}/><h3>{name}</h3><p>Requires observed {name.startsWith('MFE')?'favorable':'adverse'} excursion data from the engine.</p><span>Chart prepared · no invented excursion values</span></div>:<><svg viewBox="0 0 920 300" preserveAspectRatio="none" role="img" aria-label={name} onPointerLeave={()=>setHover(null)}>{[-1,-.5,0,.5,1].map(k=><g key={k}><line x1="55" x2="855" y1={y(k*max)} y2={y(k*max)} className="gridline"/><text x="4" y={y(k*max)+4}>{(k*max).toFixed(1)}</text></g>)}{data.map((d,i)=>{const x=scatter?55+d.x/Math.max(...data.map(p=>p.x))*780:55+(i+.5)*w;return <g key={d.label} onPointerEnter={()=>setHover(i)}><rect x={scatter?x-12:55+i*w} y="35" width={scatter?24:w} height="240" fill="transparent"/>{scatter?<circle cx={x} cy={y(d.v)} r="5" fill={d.v>=0?'var(--success)':'var(--danger)'}/>:multi?<>{[d.positive||0,d.negative||0].map((v,k)=><rect key={k} x={x-w*.3+k*w*.3} y={Math.min(y(v),baseline)} width={Math.max(2,w*.27)} height={Math.max(1,Math.abs(y(v)-baseline))} fill={k?'var(--danger)':'var(--success)'}/>)}</>:<rect x={x-w*.28} y={Math.min(y(d.v),baseline)} width={Math.max(2,w*.56)} height={Math.max(1,Math.abs(y(d.v)-baseline))} fill={d.v>=0?'var(--primary)':'var(--danger)'}/>}<text x={x} y="281" textAnchor="middle">{scatter?Math.round(d.x)+'m':d.label}</text></g>})}{hover!==null&&data[hover]&&<text x="55" y="19" className="analysis-hover">{data[hover].label} · {fmt(data[hover].v)} · {data[hover].n} trade(s) · price terms</text>}</svg>
  <div className="analysis-caption">
  <span>{name}</span>
- <span>{name.startsWith('Entries')||name==='Exit Reasons'?'Trade count':name.startsWith('R-')?`R = price PnL / ${stopDist} (reference, unvalidated)`:'Price terms — not account currency'} · UTC · seeded demo</span>
- </div>
- </>}
- <p className="report-note"><Info size={12}/>All diagrams use seeded demo trades. Values are price terms, not account currency.</p>
+  <span>{name.startsWith('Entries')||name==='Exit Reasons'?'Trade count':name.startsWith('R-')?`R = price PnL / ${stopDist} (reference, unvalidated)`:'Price terms — not account currency'} · UTC{demo?' · seeded demo':''}</span>
+  </div>
+  </>}
+  <p className="report-note"><Info size={12}/>Diagrams use {demo?'seeded demo trades':'the archived run trades'}. Values are price terms, not account currency.</p>
  </section>
  </div>;
 }
