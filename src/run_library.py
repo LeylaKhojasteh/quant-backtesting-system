@@ -128,6 +128,19 @@ def list_summaries(runs_dir: str | Path, public_dir: str | Path) -> list[dict]:
     return summaries
 
 
+def _execution_detail(execution: dict) -> dict:
+    """Expose archived SL/TP for the UI: pip intent when present, else price."""
+    detail = {
+        "stop_distance": execution.get("stop_distance"),
+        "take_profit_distance": execution.get("take_profit_distance"),
+    }
+    for key in ("stop_loss_pips", "take_profit_pips", "pip_size",
+                "effective_stop_distance", "effective_take_profit_distance"):
+        if execution.get(key) is not None:
+            detail[key] = execution.get(key)
+    return detail
+
+
 def run_detail(runs_dir: str | Path, run_id: str, public_dir: str | Path) -> dict:
     """Summary plus the archived configuration needed to reuse the run.
 
@@ -163,10 +176,7 @@ def run_detail(runs_dir: str | Path, run_id: str, public_dir: str | Path) -> dic
             "description": (result.get("strategy") or {}).get("description", ""),
             "parameters": parameters,
             "overrides": overrides,
-            "execution": {
-                "stop_distance": execution.get("stop_distance"),
-                "take_profit_distance": execution.get("take_profit_distance"),
-            },
+            "execution": _execution_detail(execution),
             "market": {
                 "symbol": conf.get("symbol"),
                 "timeframe": conf.get("timeframe"),

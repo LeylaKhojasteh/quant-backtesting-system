@@ -343,8 +343,11 @@ def execute_run(
     # authoritative price-term result: it never touches execution prices or the
     # price-term metrics. No account model -> account stays None (unchanged).
     resolved_instrument = None
-    if request.account is not None:
+    if request.account is not None or request.execution.pip_size is not None:
+        # Account runs need economics; pip-based runs need the instrument so the
+        # archive records the pip metadata that produced the effective distances.
         resolved_instrument = accounting.resolve_instrument(request.market.symbol, request.instrument)
+    if request.account is not None:
         if resolved_instrument is None:
             result.account = accounting.unavailable_report(
                 f"no instrument economics configured for symbol {request.market.symbol!r}; "

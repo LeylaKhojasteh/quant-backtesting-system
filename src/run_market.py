@@ -57,26 +57,65 @@ def resolve_run_market(runs_dir, run_id: str, public_dir) -> dict:
     }
 
 
+def _effective_bounds(market: dict) -> tuple[str, str]:
+    """Non-degenerate window for reading candles/ticks.
+
+    The archived requested range is preferred, but a date-only request stores
+    midnight for both ends of a single day, which is a zero-length window. Fall
+    back to the run's observed tick coverage (real first/last tick) in that case
+    so the chart still shows the run's real candles.
+    """
+    rs, re_ = market.get("start"), market.get("end")
+    obs_s, obs_e = market.get("observed_start"), market.get("observed_end")
+    try:
+        if rs and re_ and pd.Timestamp(rs) < pd.Timestamp(re_):
+            return str(rs), str(re_)
+    except Exception:
+        pass
+    try:
+        if obs_s and obs_e and pd.Timestamp(obs_s) < pd.Timestamp(obs_e):
+            return str(obs_s), str(obs_e)
+    except Exception:
+        pass
+    return str(rs or ""), str(re_ or "")
+
+
 def _window_bounds(market: dict, start: str | None, end: str | None,
                    *, limit: int, timeframe: str) -> tuple[str, str]:
-    """Resolve an explicit ``[start, end)`` window for a bounded request.
+    """Resolve a bounded ``[start, end)`` window for a candle/tick request.
 
-    Defaults to the last ``limit`` timeframes ending at the run's end, so the
-    first screen is real, bounded, and never the whole run.
+    Explicit caller bounds win (validated non-degenerate); otherwise the window
+    is the last ``limit`` timeframes ending at the run's effective end.
     """
-    run_start = str(market.get("start") or "")
-    run_end = str(market.get("end") or "")
+    eff_start, eff_end = _effective_bounds(market)
     if start or end:
-        win_start = start or run_start
-        win_end = end or run_end
+        win_start = start or eff_start
+        win_end = end or eff_end
         if not win_start or not win_end:
             raise run_errors.InvalidMarketRequestError("start and end are required for a windowed request")
+        # Guard a degenerate explicit window by extending it one timeframe.
+        if pd.Timestamp(win_start) >= pd.Timestamp(win_end):
+            win_end = (pd.Timestamp(win_start)
+                       + pd.tseries.frequencies.to_offset(timeframe)).isoformat().replace("+00:00", "Z")
         return str(win_start), str(win_end)
-    if not run_end:
+    if not eff_end:
         raise run_errors.InvalidMarketRequestError("run has no archived end time to window from")
-    span = pd.Timestamp(run_end) - pd.tseries.frequencies.to_offset(timeframe) * max(1, limit)
-    win_start = max(pd.Timestamp(run_start), span) if run_start else span
-    return str(win_start), str(run_end)
+    span = pd.Timestamp(eff_end) - pd.tseries.frequencies.to_offset(timeframe) * max(1, limit)
+    win_start = max(pd.Timestamp(eff_start), span) if eff_start else span
+    return str(win_start), str(eff_end)
+
+
+def _source_candidates(market: dict) -> list[str]:
+    """Data Engine sources to try, most specific first.
+
+    The archived dataset id is preferred; a symbol-only source is a safe
+    fallback so a run whose archive records a stale/renamed dataset id still
+    renders its real candles/ticks instead of a hard failure.
+    """
+    sources = [market["source"]]
+    if market.get("dataset_id"):
+        sources.append("cache:")
+    return sources
 
 
 def run_candles(runs_dir, run_id: str, public_dir, *,
@@ -86,15 +125,19 @@ def run_candles(runs_dir, run_id: str, public_dir, *,
     market = resolve_run_market(runs_dir, run_id, public_dir)
     cap = max(1, min(int(limit), data_engine.MAX_CANDLE_WINDOW))
     win_start, win_end = _window_bounds(market, start, end, limit=cap, timeframe=market["timeframe"])
-    try:
-        frame = data_engine.load_candles_window(
-            market["source"], timeframe=market["timeframe"], symbol=market["symbol"],
-            start=win_start, end=win_end, limit=cap,
-        )
-    except data_engine.PartitionMissingError as exc:
-        raise run_errors.DataNotPreparedError(str(exc)) from exc
-    except data_engine.CoverageError as exc:
-        raise run_errors.DataNotPreparedError(str(exc)) from exc
+    frame = None
+    last_exc: Exception | None = None
+    for source in _source_candidates(market):
+        try:
+            frame = data_engine.load_candles_window(
+                source, timeframe=market["timeframe"], symbol=market["symbol"],
+                start=win_start, end=win_end, limit=cap,
+            )
+            break
+        except (data_engine.PartitionMissingError, data_engine.CoverageError, data_engine.DataEngineError) as exc:
+            last_exc = exc
+    if frame is None:
+        raise run_errors.DataNotPreparedError(str(last_exc) if last_exc else "candles unavailable")
     candles = [
         {
             "timestamp": _iso(row.timestamp),
@@ -121,6 +164,19 @@ def run_candles(runs_dir, run_id: str, public_dir, *,
     }
 
 
+def _load_ticks(market: dict, *, start, end, limit):
+    """Load a real tick window, falling back to a symbol-only source."""
+    last_exc: Exception | None = None
+    for source in _source_candidates(market):
+        try:
+            return data_engine.load_ticks_window(
+                source, symbol=market["symbol"], start=start, end=end, limit=limit,
+            )
+        except (data_engine.PartitionMissingError, data_engine.CoverageError, data_engine.DataEngineError) as exc:
+            last_exc = exc
+    raise run_errors.DataNotPreparedError(str(last_exc) if last_exc else "ticks unavailable")
+
+
 def run_ticks(runs_dir, run_id: str, public_dir, *,
               start: str | None = None, end: str | None = None,
               around: str | None = None,
@@ -139,15 +195,7 @@ def run_ticks(runs_dir, run_id: str, public_dir, *,
         win_start = center - pd.Timedelta(milliseconds=max(1, int(before_ms)))
         win_end = center + pd.Timedelta(milliseconds=max(1, int(after_ms)))
         read_cap = min(data_engine.MAX_TICK_WINDOW, max(cap * 4, cap + 200))
-        try:
-            frame = data_engine.load_ticks_window(
-                market["source"], symbol=market["symbol"], start=str(win_start),
-                end=str(win_end), limit=read_cap,
-            )
-        except data_engine.PartitionMissingError as exc:
-            raise run_errors.DataNotPreparedError(str(exc)) from exc
-        except data_engine.CoverageError as exc:
-            raise run_errors.DataNotPreparedError(str(exc)) from exc
+        frame = _load_ticks(market, start=str(win_start), end=str(win_end), limit=read_cap)
         split = cap // 2
         before = frame[frame["timestamp"] < center]
         after = frame[frame["timestamp"] >= center]
@@ -160,15 +208,7 @@ def run_ticks(runs_dir, run_id: str, public_dir, *,
         win_start, win_end = _window_bounds(
             market, start, end, limit=cap,
             timeframe="1min" if not market.get("timeframe") else market["timeframe"])
-        try:
-            frame = data_engine.load_ticks_window(
-                market["source"], symbol=market["symbol"], start=win_start,
-                end=win_end, limit=cap,
-            )
-        except data_engine.PartitionMissingError as exc:
-            raise run_errors.DataNotPreparedError(str(exc)) from exc
-        except data_engine.CoverageError as exc:
-            raise run_errors.DataNotPreparedError(str(exc)) from exc
+        frame = _load_ticks(market, start=win_start, end=win_end, limit=cap)
     ticks = [
         {
             "timestamp": _iso(row.timestamp),

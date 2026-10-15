@@ -50,6 +50,10 @@ class InstrumentSpec:
     quote_currency: str
     contract_size: float
     tick_size: Optional[float] = None
+    #: Price value of one pip for this instrument. Explicit metadata only — never
+    #: inferred from decimal digits or tick size. ``None`` means unknown, so
+    #: pip-denominated SL/TP cannot be resolved for the symbol.
+    pip_size: Optional[float] = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -58,10 +62,10 @@ class InstrumentSpec:
 #: Explicit, editable catalog. Never hardcode these inside the math functions;
 #: the calculation layer always receives an InstrumentSpec.
 INSTRUMENT_CATALOG: dict[str, InstrumentSpec] = {
-    "XAUUSD": InstrumentSpec("XAUUSD", "USD", 100.0, 0.01),
-    "EURUSD": InstrumentSpec("EURUSD", "USD", 100000.0, 0.00001),
-    "GBPUSD": InstrumentSpec("GBPUSD", "USD", 100000.0, 0.00001),
-    "USDJPY": InstrumentSpec("USDJPY", "JPY", 100000.0, 0.001),
+    "XAUUSD": InstrumentSpec("XAUUSD", "USD", 100.0, 0.01, 0.01),
+    "EURUSD": InstrumentSpec("EURUSD", "USD", 100000.0, 0.00001, 0.0001),
+    "GBPUSD": InstrumentSpec("GBPUSD", "USD", 100000.0, 0.00001, 0.0001),
+    "USDJPY": InstrumentSpec("USDJPY", "JPY", 100000.0, 0.001, 0.01),
 }
 
 

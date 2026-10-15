@@ -16,7 +16,8 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 
-from src.accounting import AccountModel, InstrumentSpec
+from src.accounting import AccountModel, InstrumentSpec, resolve_instrument
+from src.execution import resolve_distances
 from src.run_errors import (
     InvalidDatasetError,
     InvalidExecutionError,
@@ -27,7 +28,12 @@ from src.run_errors import (
 
 #: CLI/engine setting names that are execution configuration, not strategy
 #: parameters. Passing them through ``--param`` is rejected.
-ENGINE_SETTING_NAMES = ("stop_distance", "take_profit_distance")
+ENGINE_SETTING_NAMES = (
+    "stop_distance",
+    "take_profit_distance",
+    "stop_loss_pips",
+    "take_profit_pips",
+)
 
 #: Resampling timeframes supported by the engine (pandas offset aliases).
 #: These are the canonical request values; the UI presents friendly labels.
@@ -67,10 +73,21 @@ class MarketRequest:
 
 @dataclass
 class ExecutionRequest:
-    """Strategy-independent execution settings consumed by the engine."""
+    """Strategy-independent execution settings consumed by the engine.
+
+    ``stop_distance`` / ``take_profit_distance`` are the **price distances** the
+    engine consumes. ``stop_loss_pips`` / ``take_profit_pips`` are the user's
+    intent (v1.0.3); when present they are converted once via the instrument's
+    ``pip_size`` and the effective price distances are stored above. Legacy
+    callers that only set ``stop_distance`` behave exactly as before.
+    """
 
     stop_distance: float = 5.0
     take_profit_distance: float = 10.0
+    stop_loss_pips: float | None = None
+    take_profit_pips: float | None = None
+    #: Pip size used for the conversion (None for legacy price-unit runs).
+    pip_size: float | None = None
 
 
 @dataclass
@@ -253,7 +270,7 @@ def parse_instrument(raw) -> InstrumentSpec | None:
         return None
     if not isinstance(raw, dict):
         raise InvalidParametersError("instrument must be an object")
-    unknown = sorted(set(raw) - {"symbol", "quote_currency", "contract_size", "tick_size"})
+    unknown = sorted(set(raw) - {"symbol", "quote_currency", "contract_size", "tick_size", "pip_size"})
     if unknown:
         raise InvalidParametersError(f"unknown instrument field(s): {unknown}")
     symbol = raw.get("symbol")
@@ -263,11 +280,13 @@ def parse_instrument(raw) -> InstrumentSpec | None:
     if not isinstance(quote, str) or not quote.strip():
         raise InvalidParametersError("instrument.quote_currency is required")
     tick = raw.get("tick_size")
+    pip = raw.get("pip_size")
     return InstrumentSpec(
         symbol=symbol.strip(),
         quote_currency=quote.strip(),
         contract_size=_account_amount("instrument.contract_size", raw.get("contract_size"), allow_zero=False),
         tick_size=None if tick is None else _account_amount("instrument.tick_size", tick, allow_zero=False),
+        pip_size=None if pip is None else _account_amount("instrument.pip_size", pip, allow_zero=False),
     )
 
 
@@ -330,9 +349,26 @@ def parse_request_payload(payload) -> BacktestRunRequest:
     raw_execution = payload.get("execution") or {}
     if not isinstance(raw_execution, dict):
         raise InvalidExecutionError("execution must be an object")
-    execution_unknown = sorted(set(raw_execution) - {"stop_distance", "take_profit_distance"})
+    execution_unknown = sorted(set(raw_execution) - {
+        "stop_distance", "take_profit_distance", "stop_loss_pips", "take_profit_pips",
+    })
     if execution_unknown:
         raise InvalidExecutionError(f"unknown execution field(s): {execution_unknown}")
+    has_pips = ("stop_loss_pips" in raw_execution) or ("take_profit_pips" in raw_execution)
+    has_price = ("stop_distance" in raw_execution) or ("take_profit_distance" in raw_execution)
+    if has_pips and has_price:
+        raise InvalidExecutionError(
+            "execution must use either pip fields (stop_loss_pips/take_profit_pips) or "
+            "price fields (stop_distance/take_profit_distance), not both"
+        )
+    stop_loss_pips = take_profit_pips = None
+    if has_pips:
+        if "stop_loss_pips" not in raw_execution or "take_profit_pips" not in raw_execution:
+            raise InvalidExecutionError(
+                "pip execution requires both stop_loss_pips and take_profit_pips"
+            )
+        stop_loss_pips = _positive_number("execution.stop_loss_pips", raw_execution.get("stop_loss_pips"))
+        take_profit_pips = _positive_number("execution.take_profit_pips", raw_execution.get("take_profit_pips"))
     stop_distance = _positive_number("execution.stop_distance", raw_execution.get("stop_distance", 5.0))
     take_profit = _positive_number(
         "execution.take_profit_distance", raw_execution.get("take_profit_distance", 10.0)
@@ -344,6 +380,17 @@ def parse_request_payload(payload) -> BacktestRunRequest:
 
     account = parse_account(payload.get("account"))
     instrument = parse_instrument(payload.get("instrument"))
+    # Resolve the effective instrument once (explicit spec, else catalog) and
+    # convert pips -> price distances exactly once at this single boundary.
+    resolved_instrument = resolve_instrument(symbol.strip(), instrument)
+    eff_stop, eff_take, pip_used = resolve_distances(
+        stop_loss_pips=stop_loss_pips,
+        take_profit_pips=take_profit_pips,
+        stop_distance=stop_distance,
+        take_profit_distance=take_profit,
+        instrument=resolved_instrument,
+        symbol=symbol.strip(),
+    )
 
     return BacktestRunRequest(
         strategy=StrategyRequest(selector=selector.strip(), parameters=dict(parameters)),
@@ -355,7 +402,13 @@ def parse_request_payload(payload) -> BacktestRunRequest:
             data_source=data_source.strip(),
             dataset_id=dataset_id.strip() if isinstance(dataset_id, str) and dataset_id.strip() else None,
         ),
-        execution=ExecutionRequest(stop_distance=stop_distance, take_profit_distance=take_profit),
+        execution=ExecutionRequest(
+            stop_distance=eff_stop,
+            take_profit_distance=eff_take,
+            stop_loss_pips=stop_loss_pips,
+            take_profit_pips=take_profit_pips,
+            pip_size=pip_used,
+        ),
         account=account,
         instrument=instrument,
         publish=publish,
@@ -404,13 +457,34 @@ def build_run_config(
             "dataset_id": request.market.dataset_id,
             "data_fingerprint": data_fingerprint,
         },
-        "execution": {
-            "stop_distance": request.execution.stop_distance,
-            "take_profit_distance": request.execution.take_profit_distance,
-        },
+        "execution": _execution_config(request.execution),
     }
     if request.account is not None:
         config["account"] = request.account.to_dict()
     if request.account is not None or instrument is not None:
         config["instrument"] = instrument.to_dict() if instrument is not None else None
+    return config
+
+
+def _execution_config(execution: ExecutionRequest) -> dict:
+    """Archive SL/TP: legacy price distances, plus pip intent when pip-based.
+
+    Legacy runs archive exactly ``stop_distance`` / ``take_profit_distance`` as
+    before. Pip runs additionally archive the user intent and the effective
+    engine values so the run is reproducible without re-deriving anything.
+    """
+    config = {
+        "stop_distance": execution.stop_distance,
+        "take_profit_distance": execution.take_profit_distance,
+    }
+    if execution.stop_loss_pips is not None or execution.take_profit_pips is not None:
+        config.update(
+            {
+                "stop_loss_pips": execution.stop_loss_pips,
+                "take_profit_pips": execution.take_profit_pips,
+                "pip_size": execution.pip_size,
+                "effective_stop_distance": execution.stop_distance,
+                "effective_take_profit_distance": execution.take_profit_distance,
+            }
+        )
     return config

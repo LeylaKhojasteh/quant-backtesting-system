@@ -62,8 +62,11 @@ export function RealRunPanel() {
   const [timeframes, setTimeframes] = useState<TimeframeOption[]>([]);
   const [start, setStart] = useState('');
   const [end, setEnd] = useState('');
-  const [stop, setStop] = useState('5');
-  const [take, setTake] = useState('10');
+  // SL/TP are entered in PIPS. Empty means "use the instrument's default",
+  // derived from the legacy price-distance defaults (5.0 / 10.0) so the
+  // effective default backtest behavior is unchanged.
+  const [stop, setStop] = useState('');
+  const [take, setTake] = useState('');
 
   // Optional account / trading-economics model. Disabled by default: a run
   // without it behaves exactly as before (price-term only).
@@ -189,9 +192,18 @@ export function RealRunPanel() {
       if (detail.market?.timeframe) setTimeframe(detail.market.timeframe);
       if (detail.market?.start) setStart(String(detail.market.start).slice(0, 10));
       if (detail.market?.end) setEnd(String(detail.market.end).slice(0, 10));
-      if (detail.execution?.stop_distance != null) setStop(String(detail.execution.stop_distance));
-      if (detail.execution?.take_profit_distance != null) {
-        setTake(String(detail.execution.take_profit_distance));
+      // Prefer archived pip intent; else convert the legacy price distance to
+      // pips for display only (the archive remains the source of truth).
+      const detailPip = detail.execution?.pip_size ?? detail.instrument?.pip_size ?? null;
+      if (detail.execution?.stop_loss_pips != null) {
+        setStop(String(detail.execution.stop_loss_pips));
+      } else if (detail.execution?.stop_distance != null && detailPip) {
+        setStop(String(+(Number(detail.execution.stop_distance) / detailPip).toFixed(10)));
+      }
+      if (detail.execution?.take_profit_pips != null) {
+        setTake(String(detail.execution.take_profit_pips));
+      } else if (detail.execution?.take_profit_distance != null && detailPip) {
+        setTake(String(+(Number(detail.execution.take_profit_distance) / detailPip).toFixed(10)));
       }
       if (detail.account) {
         setAccountEnabled(true);
@@ -292,6 +304,19 @@ export function RealRunPanel() {
 
   const instrumentSpec = instruments.find((i) => i.symbol.toUpperCase() === symbol.trim().toUpperCase()) ?? null;
 
+  // Pip-denominated SL/TP. The displayed value follows the instrument's pip
+  // size until the user edits it, so the default effective distance stays at
+  // the legacy 5.0 / 10.0 price units (no silent research-behavior change).
+  const pipSize = instrumentSpec?.pip_size ?? null;
+  const defaultStopPips = pipSize ? String(+(5 / pipSize).toFixed(10)) : '';
+  const defaultTakePips = pipSize ? String(+(10 / pipSize).toFixed(10)) : '';
+  const stopPipsValue = stop !== '' ? stop : defaultStopPips;
+  const takePipsValue = take !== '' ? take : defaultTakePips;
+  const effectiveDistance = (pips: string) => {
+    const n = Number(pips);
+    return pipSize && Number.isFinite(n) ? n * pipSize : null;
+  };
+
   const validate = (): string | null => {
     if (!strategy) return 'Select a strategy';
     if (!dataset) return 'Select a dataset';
@@ -299,10 +324,13 @@ export function RealRunPanel() {
     if (timeframes.length > 0 && !timeframes.some((t) => t.value === timeframe)) {
       return 'Unsupported timeframe. Select one of the available timeframes.';
     }
-    const stopN = Number(stop);
-    const takeN = Number(take);
-    if (!Number.isFinite(stopN) || stopN <= 0) return 'Stop distance must be a positive number';
-    if (!Number.isFinite(takeN) || takeN <= 0) return 'Take profit distance must be a positive number';
+    if (!pipSize) {
+      return `No pip size configured for ${symbol || 'this symbol'} — SL/TP in pips need instrument metadata.`;
+    }
+    const stopN = Number(stopPipsValue);
+    const takeN = Number(takePipsValue);
+    if (!Number.isFinite(stopN) || stopN <= 0) return 'Stop Loss (pips) must be a positive number';
+    if (!Number.isFinite(takeN) || takeN <= 0) return 'Take Profit (pips) must be a positive number';
     if (!start || !end) return 'Start and end dates are required';
     if (start > end) return 'Start date must be on or before the end date';
     if (accountEnabled) {
@@ -370,8 +398,8 @@ export function RealRunPanel() {
           end,
         },
         execution: {
-          stop_distance: Number(stop),
-          take_profit_distance: Number(take),
+          stop_loss_pips: Number(stopPipsValue),
+          take_profit_pips: Number(takePipsValue),
         },
         ...(accountEnabled
           ? {
@@ -387,6 +415,7 @@ export function RealRunPanel() {
                     quote_currency: instrumentSpec.quote_currency,
                     contract_size: instrumentSpec.contract_size,
                     ...(instrumentSpec.tick_size != null ? { tick_size: instrumentSpec.tick_size } : {}),
+                    ...(instrumentSpec.pip_size != null ? { pip_size: instrumentSpec.pip_size } : {}),
                   }
                 : undefined,
             }
@@ -606,14 +635,22 @@ export function RealRunPanel() {
 
           <div className="rr-group-label">Trade / Execution</div>
           <p className="rr-help">Stop / take levels are engine execution inputs, not strategy parameters.</p>
-          <label>
-            Stop Distance
-            <input type="number" step="any" value={stop} onChange={(e) => setStop(e.target.value)} aria-label="Stop distance" />
+          <label title="Converted to price distance using the selected instrument's pip size.">
+            Stop Loss (pips)
+            <input type="number" step="any" min="0" value={stopPipsValue} onChange={(e) => setStop(e.target.value)} aria-label="Stop loss pips" />
           </label>
-          <label>
-            Take Profit Distance
-            <input type="number" step="any" value={take} onChange={(e) => setTake(e.target.value)} aria-label="Take profit distance" />
+          <label title="Converted to price distance using the selected instrument's pip size.">
+            Take Profit (pips)
+            <input type="number" step="any" min="0" value={takePipsValue} onChange={(e) => setTake(e.target.value)} aria-label="Take profit pips" />
           </label>
+          {pipSize ? (
+            <p className="rr-help">
+              Effective distance: SL {effectiveDistance(stopPipsValue)?.toFixed(5)} · TP {effectiveDistance(takePipsValue)?.toFixed(5)} price units
+              {' '}(1 pip = {pipSize} · {symbol.trim().toUpperCase()})
+            </p>
+          ) : (
+            <p className="rr-warn" role="status">No pip size configured for {symbol || 'this symbol'} — SL/TP in pips need instrument metadata.</p>
+          )}
 
           <div className="rr-group-label">Position sizing &amp; account <span className="meta">· optional</span></div>
           <label className="rr-check">

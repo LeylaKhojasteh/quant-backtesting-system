@@ -238,8 +238,8 @@ def main() -> int:
         ok &= check("reuse restored strategy", "Candle Direction" in strat_text, strat_text[:60])
         # change execution settings -> second run differs
         cdp.evaluate(f"({CLICK_ARIA_JS})('Strategy & Trade Settings')")
-        cdp.evaluate(f"({WAIT_SEL_JS})('[aria-label=\"Stop distance\"]')")
-        set_input(cdp, '[aria-label="Stop distance"]', "25")
+        cdp.evaluate(f"({WAIT_SEL_JS})('[aria-label=\"Stop loss pips\"]')")
+        set_input(cdp, '[aria-label="Stop loss pips"]', "2500")
         escape(cdp)
         set_input(cdp, '[aria-label="Run start date"]', "2025-01-02")
         set_input(cdp, '[aria-label="Run end date"]', "2025-01-02")

@@ -260,7 +260,7 @@ def main() -> int:
         set_input(cdp, '[aria-label="Run start date"]', "2025-01-02")
         set_input(cdp, '[aria-label="Run end date"]', "2025-01-02")
         cdp.evaluate(f"({CLICK_ARIA_JS})('Strategy & Trade Settings')")
-        cdp.evaluate(f"({WAIT_SEL_JS})('[aria-label=\"Stop distance\"]')")
+        cdp.evaluate(f"({WAIT_SEL_JS})('[aria-label=\"Stop loss pips\"]')")
         cdp.evaluate(f"({CLICK_ARIA_JS})('Enable account model')")
         cdp.evaluate(f"({WAIT_SEL_JS})('[aria-label=\"Account currency\"]')")
         set_input(cdp, '[aria-label="Account currency"]', "USD")

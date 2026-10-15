@@ -197,7 +197,7 @@ def main() -> int:
 
             # real run, account model enabled -> account metrics
             cdp.evaluate(f"({CLICK_ARIA_JS})('Strategy & Trade Settings')")
-            cdp.evaluate(f"({WAIT_SEL_JS})('[aria-label=\"Stop distance\"]')")
+            cdp.evaluate(f"({WAIT_SEL_JS})('[aria-label=\"Stop loss pips\"]')")
             cdp.evaluate(f"({CLICK_ARIA_JS})('Enable account model')")
             cdp.evaluate(f"({WAIT_SEL_JS})('[aria-label=\"Account currency\"]')")
             set_input(cdp, '[aria-label="Account currency"]', "USD")

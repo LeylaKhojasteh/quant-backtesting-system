@@ -48,7 +48,7 @@ def main() -> int:
 
         # 1) instrument details hidden; core account controls present
         cdp.evaluate(f"({CLICK_ARIA_JS})('Strategy & Trade Settings')")
-        ok &= check("settings dialog opens", cdp.evaluate(f"({WAIT_SEL_JS})('[aria-label=\"Stop distance\"]')"))
+        ok &= check("settings dialog opens", cdp.evaluate(f"({WAIT_SEL_JS})('[aria-label=\"Stop loss pips\"]')"))
         ok &= check("no Instrument details section", not cdp.evaluate("!!document.querySelector('.rr-instrument')"))
         dlg = cdp.evaluate("[...document.querySelectorAll('.settings-dialog')].map(d=>d.textContent).join(' ')") or ""
         ok &= check("no contract/tick/quotes exposed", "Contract size" not in dlg and "Tick size" not in dlg, dlg[:80])

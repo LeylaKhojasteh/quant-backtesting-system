@@ -416,3 +416,45 @@ describe('post-QA fixes (v1.0.2)', () => {
     assert.ok(ctx.includes('ACTIVE_STATES.has(job.state)'), 'active derived from active states only');
   });
 });
+
+// ---------------------------------------------------------------------------
+// v1.0.3 — pip-based SL/TP
+// ---------------------------------------------------------------------------
+describe('pip-based SL/TP (v1.0.3)', () => {
+  let allFiles;
+  const file = (name) => allFiles.get(path.join(appDir, name)) || '';
+
+  test('setup: read app sources', async () => {
+    allFiles = await readAllTsxFiles();
+    assert.ok(allFiles.size > 0);
+  });
+
+  test('SL/TP inputs are labelled and submitted in pips', () => {
+    const panel = file('real-run-panel.tsx');
+    assert.ok(panel.includes('Stop Loss (pips)'), 'Stop Loss labelled in pips');
+    assert.ok(panel.includes('Take Profit (pips)'), 'Take Profit labelled in pips');
+    assert.ok(panel.includes('stop_loss_pips: Number(stopPipsValue)'), 'sends stop_loss_pips');
+    assert.ok(panel.includes('take_profit_pips: Number(takePipsValue)'), 'sends take_profit_pips');
+    assert.ok(!/stop_distance: Number\(stop\)/.test(panel), 'no legacy price submit in the UI');
+  });
+
+  test('pips are converted via the instrument pip_size (no hardcoded symbol math)', () => {
+    const panel = file('real-run-panel.tsx');
+    assert.ok(panel.includes('instrumentSpec?.pip_size'), 'pip size read from the instrument');
+    assert.ok(panel.includes('n * pipSize'), 'effective distance = pips x pip_size');
+    assert.ok(panel.includes('Converted to price distance using the selected instrument'), 'tooltip present');
+    // No XAUUSD-specific conversion constant in the panel.
+    assert.ok(!/XAUUSD.*0\.01|0\.01.*XAUUSD/.test(panel), 'no hardcoded XAUUSD pip logic');
+  });
+
+  test('pip size is exposed on the instrument contract', () => {
+    const client = file('bridge-client.ts');
+    assert.ok(client.includes('pip_size: number | null'), 'InstrumentInfo.pip_size');
+    assert.ok(client.includes('stop_loss_pips?: number'), 'request payload supports pip fields');
+  });
+
+  test('unknown pip size is surfaced, not silently converted', () => {
+    const panel = file('real-run-panel.tsx');
+    assert.ok(panel.includes('No pip size configured'), 'clear message when pip size is unknown');
+  });
+});

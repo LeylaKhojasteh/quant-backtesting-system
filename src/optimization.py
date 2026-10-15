@@ -19,7 +19,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from src import publish_run, run_backtest, run_errors, run_request
+from src import accounting, execution, publish_run, run_backtest, run_errors, run_request
 from src.result_contract import utc_now_iso
 
 DEFAULT_MAX_CANDIDATES = 100
@@ -168,6 +168,30 @@ def build_combinations(request: OptimizationRequest, declared: dict) -> list[dic
         key: [_positive_exec(key, v) for v in request.execution_grid[key]] for key in exec_keys
     }
 
+    # Pip grid keys are user intent; convert them to engine price distances via
+    # the one shared conversion (never a second implementation). Price grid keys
+    # (legacy) pass through unchanged, so old studies reproduce exactly.
+    pip_keys = [k for k in exec_keys if k in ("stop_loss_pips", "take_profit_pips")]
+    price_keys = [k for k in exec_keys if k in ("stop_distance", "take_profit_distance")]
+    if pip_keys and price_keys:
+        raise run_errors.InvalidOptimizationError(
+            "execution_grid cannot mix pip keys (stop_loss_pips/take_profit_pips) "
+            "with price keys (stop_distance/take_profit_distance)"
+        )
+    if pip_keys:
+        instrument = accounting.resolve_instrument(request.market.symbol, request.instrument)
+        pip_size = execution.require_pip_size(instrument, request.market.symbol)
+        converted: dict = {}
+        for key in exec_keys:
+            if key == "stop_loss_pips":
+                converted["stop_distance"] = [execution.price_distance_from_pips(v, pip_size) for v in exec_values[key]]
+            elif key == "take_profit_pips":
+                converted["take_profit_distance"] = [execution.price_distance_from_pips(v, pip_size) for v in exec_values[key]]
+            else:
+                converted[key] = exec_values[key]
+        exec_values = converted
+        exec_keys = sorted(exec_values)
+
     total = 1
     for key in strategy_keys:
         total *= len(strategy_values[key])
@@ -188,12 +212,12 @@ def build_combinations(request: OptimizationRequest, declared: dict) -> list[dic
     for s_vals in strategy_iter:
         overrides = dict(zip(strategy_keys, s_vals))
         for e_vals in exec_iter_factory():
-            execution = {
+            exec_cfg = {
                 "stop_distance": request.execution.stop_distance,
                 "take_profit_distance": request.execution.take_profit_distance,
             }
-            execution.update(dict(zip(exec_keys, e_vals)))
-            combos.append({"overrides": overrides, "execution": execution})
+            exec_cfg.update(dict(zip(exec_keys, e_vals)))
+            combos.append({"overrides": overrides, "execution": exec_cfg})
     return combos
 
 

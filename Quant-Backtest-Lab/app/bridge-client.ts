@@ -161,6 +161,7 @@ export interface InstrumentPayload {
   quote_currency: string;
   contract_size: number;
   tick_size?: number | null;
+  pip_size?: number | null;
 }
 
 export interface BacktestRunRequestPayload {
@@ -173,7 +174,12 @@ export interface BacktestRunRequestPayload {
     end?: string | null;
     data_source?: string;
   };
-  execution?: { stop_distance?: number; take_profit_distance?: number };
+  execution?: {
+    stop_distance?: number;
+    take_profit_distance?: number;
+    stop_loss_pips?: number;
+    take_profit_pips?: number;
+  };
   /** Optional account model. Omit for a price-term-only run (unchanged). */
   account?: AccountPayload;
   /** Optional explicit instrument economics; falls back to the catalog. */
@@ -282,6 +288,8 @@ export interface InstrumentInfo {
   quote_currency: string;
   contract_size: number;
   tick_size: number | null;
+  /** Price value of one pip (instrument metadata); null when unknown. */
+  pip_size: number | null;
 }
 
 export async function listInstruments(fetchImpl?: typeof fetch): Promise<InstrumentInfo[]> {
@@ -449,11 +457,22 @@ export interface RunLibrarySummary {
   published: boolean;
 }
 
+export interface RunExecutionDetail {
+  stop_distance: number | null;
+  take_profit_distance: number | null;
+  /** Present for pip-based runs (v1.0.3). */
+  stop_loss_pips?: number | null;
+  take_profit_pips?: number | null;
+  pip_size?: number | null;
+  effective_stop_distance?: number | null;
+  effective_take_profit_distance?: number | null;
+}
+
 export interface RunDetail extends RunLibrarySummary {
   description: string;
   parameters: Record<string, unknown>;
   overrides: Record<string, unknown>;
-  execution: { stop_distance: number | null; take_profit_distance: number | null };
+  execution: RunExecutionDetail;
   market: {
     symbol: string | null;
     timeframe: string | null;

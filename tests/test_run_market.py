@@ -187,6 +187,15 @@ class RunMarketTest(unittest.TestCase):
         self.assertEqual(market["start"], market["observed_start"])
         self.assertEqual(market["end"], market["observed_end"])
 
+    def test_candles_stale_dataset_id_falls_back_to_symbol(self):
+        # A run whose archive records a stale/renamed dataset id must still
+        # render real candles via the symbol-only source (no hard failure).
+        self._make_run("run_stale", start="2099-01-01T00:00:00Z", end="2099-01-31T23:59:59Z",
+                       dataset_id="stale_dataset_id")
+        status, body = self._get("/runs/run_stale/candles?limit=50")
+        self.assertEqual(status, 200, body)
+        self.assertGreater(body["count"], 0, body)
+
     def test_candles_missing_cache_is_structured_error(self):
         # A run whose dataset exists but whose candle cache was never built.
         shutil.rmtree(self.root / "candles")

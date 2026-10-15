@@ -64,9 +64,9 @@ def main() -> int:
         # unified settings dialog
         ok &= check("single settings action", cdp.evaluate("document.querySelectorAll('.rr-settings-btn').length") == 1)
         cdp.evaluate(f"({CLICK_ARIA_JS})('Strategy & Trade Settings')")
-        ok &= check("unified dialog shows trade settings", cdp.evaluate(f"({WAIT_SEL_JS})('[aria-label=\"Stop distance\"]')"))
+        ok &= check("unified dialog shows trade settings", cdp.evaluate(f"({WAIT_SEL_JS})('[aria-label=\"Stop loss pips\"]')"))
         ok &= check("SL/TP + account in one dialog",
-                    cdp.evaluate("!!document.querySelector('[aria-label=\"Take profit distance\"]')")
+                    cdp.evaluate("!!document.querySelector('[aria-label=\"Take profit pips\"]')")
                     and cdp.evaluate("!!document.querySelector('[aria-label=\"Enable account model\"]')"))
         ok &= check("instrument fields no longer handwritten",
                     not cdp.evaluate("!!document.querySelector('[aria-label=\"Instrument contract size\"]')"))

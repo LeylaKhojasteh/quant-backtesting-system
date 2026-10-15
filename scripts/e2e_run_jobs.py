@@ -170,7 +170,7 @@ def main() -> int:
         dup_payload = {"strategy": {"selector": "threshold_direction", "parameters": {}},
                        "market": {"symbol": "XAUUSD", "timeframe": "15min",
                                   "start": "2025-01-02", "end": "2025-01-02",
-                                  "dataset_id": "xauusd_dukascopy_tick"},
+                                  "dataset_id": "xauusd_dukas_ticks"},
                        "execution": {"stop_distance": 5, "take_profit_distance": 10}}
         code, dup = job_api("/run-jobs", "POST", dup_payload)
         ok &= check("A: duplicate POST rejected (409)", code == 409
@@ -196,7 +196,7 @@ def main() -> int:
             "strategy": {"selector": str(strat / "slow_signal.py"), "parameters": {}},
             "market": {"symbol": "XAUUSD", "timeframe": "15min",
                        "start": "2025-01-02", "end": "2025-01-02",
-                       "dataset_id": "xauusd_dukascopy_tick"},
+                       "dataset_id": "xauusd_dukas_ticks"},
             "execution": {"stop_distance": 5, "take_profit_distance": 10},
             "publish": True})
         ok &= check("B: slow job started via API", code == 201, str(code))
@@ -228,7 +228,7 @@ def main() -> int:
             "strategy": {"selector": str(strat / "slow_signal.py"), "parameters": {}},
             "market": {"symbol": "XAUUSD", "timeframe": "15min",
                        "start": "2025-01-02", "end": "2025-01-02",
-                       "dataset_id": "xauusd_dukascopy_tick"},
+                       "dataset_id": "xauusd_dukas_ticks"},
             "execution": {"stop_distance": 5, "take_profit_distance": 10},
             "publish": True})
         ok &= check("C: slow job started", code == 201, str(code))
