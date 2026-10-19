@@ -2,6 +2,13 @@
   "version": 1,
   "runs": [
     {
+      "runId": "run_177ea705",
+      "createdAt": "2026-10-17T16:13:18.287333Z",
+      "file": "runs/run_177ea705/result.json",
+      "label": "run_177ea705 · Candle Direction 1.0 · XAUUSD 2025-01-01",
+      "description": "Candle Direction on XAUUSD 15min archived run."
+    },
+    {
       "runId": "run_0001",
       "file": "runs/run_0001/result.json",
       "label": "run_0001 · Candle Direction 1.0 · XAUUSD 2025-01-02",

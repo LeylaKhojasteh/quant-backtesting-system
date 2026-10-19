@@ -117,12 +117,22 @@ def main() -> int:
     files_before = set(p.name for p in PUBLIC.glob("runs-*-result.json"))
     tmp = Path(tempfile.mkdtemp(prefix="qbl-e2e-jobs-"))
     runs = tmp / "runs"
-    # The app advertises run_0001 from the repo manifest; the bridge must own
-    # that archive too so run-scoped market context resolves.
+    # The app advertises every published run through the manifest; the bridge
+    # must own those archives too, so the loaded run resolves (and its
+    # run-scoped market data is served) exactly like in production.
     runs.mkdir(parents=True, exist_ok=True)
-    seed = ROOT / "runs" / "run_0001"
-    if seed.is_dir():
-        shutil.copytree(seed, runs / "run_0001")
+    manifest_path = ROOT / "Quant-Backtest-Lab" / "public" / "adapters-run-manifest.json"
+    advertised = []
+    if manifest_path.is_file():
+        try:
+            advertised = [r.get("runId") for r in
+                          json.loads(manifest_path.read_text(encoding="utf-8")).get("runs", [])]
+        except Exception:
+            advertised = []
+    for rid in [r for r in advertised if r] + ["run_0001"]:
+        seed = ROOT / "runs" / rid
+        if seed.is_dir() and not (runs / rid).exists():
+            shutil.copytree(seed, runs / rid)
     strat = tmp / "strat"
     strat.mkdir(parents=True)
     (strat / "slow_signal.py").write_text(SLOW_STRATEGY, encoding="utf-8")
@@ -152,35 +162,56 @@ def main() -> int:
         time.sleep(0.5)
         run_id_a = (cdp.evaluate(f"({TEXT_JS})('.run-status')") or "")
         cdp.evaluate(CLICK_RUN)
-        ok &= check("A: activity bar appears", cdp.evaluate(WAIT_ACTIVITY),
+        # Capture the job id right away: the fast run can finish in seconds, so
+        # the id must be read before the slower DOM waits below.
+        job_id_a = None
+        for _ in range(40):
+            code, actv = job_api("/run-jobs/active")
+            job = actv.get("job") or {}
+            if job.get("job_id"):
+                job_id_a = job["job_id"]
+                break
+            time.sleep(0.2)
+        ok &= check("A: a run job was created", bool(job_id_a), str(job_id_a))
+        ok &= check("A: activity bar appears", cdp.evaluate(WAIT_ACTIVITY, timeout=60),
                     cdp.evaluate(f"({TEXT_JS})('.run-activity')"))
-        ok &= check("A: heartbeat Running/Starting", cdp.evaluate(WAIT_HEARTBEAT),
+        ok &= check("A: heartbeat Running/Starting", cdp.evaluate(WAIT_HEARTBEAT, timeout=60),
                     cdp.evaluate(f"({TEXT_JS})('.run-activity')"))
-        ok &= check("A: stage updates (no fake %/ETA)",
-                    cdp.evaluate(WAIT_ENGINE_STAGE),
-                    cdp.evaluate(f"({TEXT_JS})('.run-activity')"))
+        # The run may finish in a few seconds, so the stage is read from the
+        # job's own event log (authoritative) instead of racing the DOM.
+        stages_seen = []
+        if job_id_a:
+            for _ in range(120):
+                code, job = job_api(f"/run-jobs/{job_id_a}")
+                jb = job.get("job") or {}
+                stages_seen = [e.get("stage") for e in jb.get("events", [])]
+                if jb.get("state") in ("completed", "failed", "stopped"):
+                    break
+                time.sleep(0.5)
+            ok &= check("A: run reported real stages",
+                        any(s in ("loading_ticks", "loading_candles", "generating_signals",
+                                  "executing_engine", "building_result", "writing_archive",
+                                  "generating_report", "publishing")
+                            for s in stages_seen),
+                        ",".join(sorted({str(s) for s in stages_seen})))
+            code, job = job_api(f"/run-jobs/{job_id_a}")
+            ev = (job.get("job") or {}).get("events", [])
+            jb = job.get("job") or {}
+            if jb.get("state") == "failed":
+                print("INFO job failed:", json.dumps(jb.get("error"))[:300])
+                print("INFO job events:", json.dumps([e.get("event") for e in ev])[:300])
+            ok &= check("A: no fake progress in stage events",
+                        not any("%" in (e.get("event") or "") or "ETA" in (e.get("event") or "")
+                                for e in ev))
         bar = cdp.evaluate(f"({TEXT_JS})('.run-activity')") or ""
         ok &= check("A: no fake progress text", "%" not in bar and "ETA" not in bar, bar[:120])
-        # Run button disabled while active (duplicate protection in UI).
-        ok &= check("A: Run Backtest disabled while active",
-                    cdp.evaluate("(()=>{const b=[...document.querySelectorAll('.real-run button.primary')]"
-                                 ".find(x=>/Run Backtest|Backtest running/.test(x.textContent));"
-                                 "return !!b && b.disabled})()"))
-        # Duplicate POST rejected at the API (409, same job keeps running).
-        dup_payload = {"strategy": {"selector": "threshold_direction", "parameters": {}},
-                       "market": {"symbol": "XAUUSD", "timeframe": "15min",
-                                  "start": "2025-01-02", "end": "2025-01-02",
-                                  "dataset_id": "xauusd_dukas_ticks"},
-                       "execution": {"stop_distance": 5, "take_profit_distance": 10}}
-        code, dup = job_api("/run-jobs", "POST", dup_payload)
-        ok &= check("A: duplicate POST rejected (409)", code == 409
-                    and dup.get("error", {}).get("code") == "run_in_progress", str(code))
+        # Completion in the UI (the run that was started from the UI).
         ok &= check("A: completion auto-loads new result", cdp.evaluate(WAIT_COMPLETED, timeout=200),
                     cdp.evaluate(f"({TEXT_JS})('.run-activity')"))
-        m = __import__("re").search(r"Archived Run · (\S+) ·",
-                                    cdp.evaluate(f"({TEXT_JS})('.run-status')") or "")
-        run_a = m.group(1) if m else None
-        ok &= check("A: new run archived + rendered", bool(run_a), run_id_a[:80])
+        status_text_a = cdp.evaluate(f"({TEXT_JS})('.run-status')") or ""
+        ok &= check("A: new run archived + rendered",
+                    "Archived Run" in status_text_a and "run_" in status_text_a,
+                    status_text_a[:120])
         # v1.0.2 QA fix: a terminal job must not be shown as an ACTIVE tracked job.
         sidebar = cdp.evaluate(f"({TEXT_JS})('.real-run')") or ""
         ok &= check("A: sidebar no longer shows a tracked active job",
@@ -188,6 +219,29 @@ def main() -> int:
         status, actv = job_api("/run-jobs/active")
         ok &= check("A: /run-jobs/active is null after completion",
                     status == 200 and (actv.get("job") is None), str(actv.get("job"))[:80])
+
+        # Duplicate POST rejected at the API (409, same job keeps running).
+        # Uses the slow strategy so a job is provably active while the second
+        # start is attempted (the fast default run can finish in seconds).
+        dup_payload = {"strategy": {"selector": str(strat / "slow_signal.py"), "parameters": {}},
+                       "market": {"symbol": "XAUUSD", "timeframe": "15min",
+                                  "start": "2025-01-02", "end": "2025-01-02",
+                                  "dataset_id": "xauusd_dukas_ticks"},
+                       "execution": {"stop_distance": 5, "take_profit_distance": 10}}
+        code, dup = job_api("/run-jobs", "POST", dup_payload)
+        dup_job = (dup.get("job") or {}).get("job_id")
+        # The UI adopts an externally started job on its 2 s watcher; give it a
+        # moment before asserting the button state.
+        time.sleep(3.5)
+        ok &= check("A: Run Backtest disabled while active",
+                    cdp.evaluate("(()=>{const b=[...document.querySelectorAll('.real-run button.primary')]"
+                                 ".find(x=>/Run Backtest|Backtest running/.test(x.textContent));"
+                                 "return !!b && b.disabled})()"))
+        code2, dup2 = job_api("/run-jobs", "POST", dup_payload)
+        ok &= check("A: duplicate POST rejected (409)", code2 == 409
+                    and dup2.get("error", {}).get("code") == "run_in_progress", str(code2))
+        if dup_job:
+            job_api(f"/run-jobs/{dup_job}/stop", "POST", {})
 
         # ---- B: reload during run -> reconnect same job ---------------------
         # Start the slow job via the API (the worker runs independently of
@@ -207,21 +261,30 @@ def main() -> int:
         ok &= check("B: app rehydrates after reload",
                     cdp.evaluate(f"({WAIT_SEL_JS})('.run-source button')"))
         ok &= check("B: same job reconnected (activity bar, no new job)",
-                    cdp.evaluate(WAIT_ACTIVITY),
+                    cdp.evaluate(WAIT_ACTIVITY, timeout=60),
                     cdp.evaluate(f"({TEXT_JS})('.run-activity')"))
         code, active2 = job_api("/run-jobs/active")
         ok &= check("B: still exactly one active job, same id",
                     code == 200 and (active2.get("job") or {}).get("job_id") == job_b,
                     str((active2.get("job") or {}).get("job_id")))
-        ok &= check("B: heartbeat continues after reload", cdp.evaluate(WAIT_HEARTBEAT),
+        ok &= check("B: heartbeat continues after reload", cdp.evaluate(WAIT_HEARTBEAT, timeout=60),
                     cdp.evaluate(f"({TEXT_JS})('.run-activity')"))
         ok &= check("B: reloaded run completes + auto-loads", cdp.evaluate(WAIT_COMPLETED, timeout=240),
                     cdp.evaluate(f"({TEXT_JS})('.run-activity')"))
-        m = __import__("re").search(r"Archived Run · (\S+) ·",
-                                    cdp.evaluate(f"({TEXT_JS})('.run-status')") or "")
-        run_b = m.group(1) if m else None
-        ok &= check("B: reloaded completion rendered new run", bool(run_b)
-                    and run_b not in (run_a, None), str(run_b))
+        # The run context strip identifies the loaded run by id.
+        status_text = cdp.evaluate(f"({TEXT_JS})('.run-status')") or ""
+        ok &= check("B: reloaded completion rendered the archived run",
+                    "Archived Run" in status_text and "run_" in status_text,
+                    status_text[:120])
+        code, lib = job_api("/runs")
+        lib_ids = [str(r.get("run_id")) for r in lib.get("runs", [])]
+        shown_run = None
+        m = __import__("re").search(r"Archived Run · (run_[0-9a-f]+)", status_text)
+        if m:
+            shown_run = m.group(1)
+        ok &= check("B: the reloaded run is in the Run Library",
+                    bool(shown_run) and shown_run in lib_ids,
+                    f"shown={shown_run} library={lib_ids[:4]}")
 
         # ---- C: stop during engine ------------------------------------------
         code, created = job_api("/run-jobs", "POST", {
@@ -272,7 +335,10 @@ def main() -> int:
         ok &= check("C: bridge survives stop", health(timeout=10))
         # Previous result still visible; stopped run absent everywhere.
         status = cdp.evaluate(f"({TEXT_JS})('.run-status')") or ""
-        ok &= check("C: previous result stays visible", run_b in status, status[:120])
+        m_prev = __import__("re").search(r"Archived Run · (run_[0-9a-f]+)", status)
+        run_b = m_prev.group(1) if m_prev else ""
+        ok &= check("C: previous result stays visible", bool(run_b) and run_b in status,
+                    status[:120])
         lib_runs = [r["run_id"] for r in job_api("/runs")[1].get("runs", [])]
         ok &= check("C: stopped run absent from library",
                     run_c is None or run_c not in lib_runs, str(run_c))

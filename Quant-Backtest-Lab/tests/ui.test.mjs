@@ -458,3 +458,75 @@ describe('pip-based SL/TP (v1.0.3)', () => {
     assert.ok(panel.includes('No pip size configured'), 'clear message when pip size is unknown');
   });
 });
+
+// ---------------------------------------------------------------------------
+// v1.0.3 — Price Chart interaction & windowing
+// ---------------------------------------------------------------------------
+describe('price chart interaction & windowing (v1.0.3)', () => {
+  let allFiles;
+  const file = (name) => allFiles.get(path.join(appDir, name)) || '';
+
+  test('setup: read app sources', async () => {
+    allFiles = await readAllTsxFiles();
+    assert.ok(allFiles.size > 0);
+  });
+
+  test('price axis uses visible candles and visible trades only', () => {
+    const charts = file('charts.tsx');
+    // The axis must never mix every run trade into the scale.
+    assert.ok(!/trades\.flatMap\(\(t\) => \[t\.entry, t\.exit\]\)/.test(charts),
+      'no axis built from ALL trades');
+    assert.ok(charts.includes('visibleTrades'), 'axis/markers use the visible-window trades');
+    assert.ok(charts.includes('const levels ='), 'levels computed from visible data');
+  });
+
+  test('only visible-window trade markers are rendered', () => {
+    const charts = file('charts.tsx');
+    assert.ok(charts.includes('(context && trade ? [trade] : visibleTrades)'),
+      'marker overlay limited to visible trades');
+  });
+
+  test('a single visible-count drives zoom (wheel and buttons cannot cancel)', () => {
+    const charts = file('charts.tsx');
+    assert.ok(charts.includes('visibleCount'), 'single visible-count state');
+    assert.ok(!/setZoom\(/.test(charts), 'no separate zoom state to cancel the count');
+    assert.ok(charts.includes('setVisibleCount'), 'zoom in/out and wheel update the count');
+  });
+
+  test('drag pans from a synchronous ref and survives capture failure', () => {
+    const charts = file('charts.tsx');
+    assert.ok(charts.includes('dragStartRef.current === null'),
+      'drag state comes from the ref, not render state');
+    assert.ok(charts.includes('setPointerCapture'), 'pointer capture is used');
+    assert.ok(/try \{\s*\n?\s*e\.currentTarget\.setPointerCapture/.test(charts),
+      'pointer capture failure must not abort the drag');
+    assert.ok(charts.includes('setPanOffset(next - centeredStart)'), 'drag updates the viewport');
+  });
+
+  test('trade selection centers the viewport through an explicit request', () => {
+    const charts = file('charts.tsx');
+    assert.ok(charts.includes('centerTarget'), 'chart accepts a centering request');
+    assert.ok(charts.includes('onCenterTrade'), 'chart reports a centering request');
+    const page = file('page.tsx');
+    assert.ok(page.includes('centerTarget={centerTarget}'), 'page passes the centering request');
+    assert.ok(page.includes('onCenterTrade={centerChartOnTrade}'), 'page handles centering');
+    assert.ok(!page.includes('windowStartRef'), 'no ref-based external window control');
+  });
+
+  test('candle buffer is bounded and merged by timestamp', () => {
+    const market = file('run-market.ts');
+    assert.ok(market.includes('MAX_CANDLE_BUFFER = 1500'), 'buffer capped at 1500 candles');
+    assert.ok(market.includes('INITIAL_CANDLE_WINDOW = 250'), 'initial window of 250 candles');
+    assert.ok(market.includes('export function mergeCandles'), 'merge helper exists');
+    assert.ok(market.includes('byTime.set(c.t, c)'), 'merge de-duplicates by timestamp');
+    assert.ok(market.includes('loadMore'), 'edge loading exposed');
+    assert.ok(market.includes('getRunCandles'), 'uses the existing run-scoped API');
+  });
+
+  test('no demo candles reach the real chart path', () => {
+    const charts = file('charts.tsx');
+    assert.ok(!/from '\.\/demo'/.test(charts), 'chart does not import demo market data');
+    const market = file('run-market.ts');
+    assert.ok(!/from '\.\/demo'/.test(market), 'market hook does not import demo data');
+  });
+});

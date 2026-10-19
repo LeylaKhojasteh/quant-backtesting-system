@@ -6,6 +6,7 @@ import { fmt, time } from './format';
 import type { Candle, TickPoint, Trade } from './types';
 import { excursions } from './analytics';
 import { useRun } from './run-context';
+import { INITIAL_CANDLE_WINDOW } from './run-market';
 import { formatUtcMs } from './utc';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
@@ -132,6 +133,11 @@ export function CandleChart({
   overlay = 'Signals + Trades',
   status = 'ready',
   onSelect,
+  onCenterTrade,
+  centerTarget,
+  onLoadMore,
+  hasMoreBefore,
+  hasMoreAfter,
 }: {
   /** Real BID candles from the run's market context (never synthesized). */
   candles: Candle[];
@@ -142,12 +148,48 @@ export function CandleChart({
   overlay?: string;
   status?: 'idle' | 'loading' | 'ready' | 'unavailable';
   onSelect?: (i: number) => void;
+  /** Called when a trade should be centered in the chart view. */
+  onCenterTrade?: (trade: Trade) => void;
+  /** External request to center the viewport on a timestamp (trade selection). */
+  centerTarget?: { t: number; nonce: number } | null;
+  /** Request the adjacent real candle window (edge navigation). */
+  onLoadMore?: (direction: 'before' | 'after') => void;
+  hasMoreBefore?: boolean;
+  hasMoreAfter?: boolean;
 }) {
-  const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState(0);
+  // Visible candle count (null = automatic: the standard window, capped by
+  // what is actually loaded). Zoom in/out and the mouse wheel both move this
+  // single number, so they can never cancel each other out.
+  const [visibleCount, setVisibleCount] = useState<number | null>(null);
   const [hover, setHover] = useState<number | null>(null);
-  const drag = useRef<number | null>(null);
+  /** Manual pan offset relative to the anchored position (pure derivation). */
+  const [panOffset, setPanOffset] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStartRef = useRef<{ x: number; start: number } | null>(null);
   const { ref, width, height, ready } = useElementSize();
+
+  const base: Candle[] = candles;
+  const MIN_WINDOW = 6;
+  const MAX_WINDOW = 400;
+  /** How close to a loaded edge triggers fetching the adjacent real window. */
+  const EDGE_TRIGGER = 40;
+
+  // Default position: the newest loaded real candles. A trade-selection
+  // request overrides it and re-centers on that trade's timestamp.
+  const autoCount = Math.min(INITIAL_CANDLE_WINDOW, base.length);
+  const count = Math.max(MIN_WINDOW, Math.min(MAX_WINDOW, visibleCount ?? autoCount));
+  const maxStart = Math.max(0, base.length - count);
+
+  const centeredStart = useMemo(() => {
+    if (!base.length) return 0;
+    if (!centerTarget) return maxStart; // newest real candles
+    let idx = base.findIndex((c) => c.t >= centerTarget.t);
+    if (idx === -1) idx = base.length - 1;
+    return Math.max(0, Math.min(maxStart, idx - Math.floor(count / 2)));
+  }, [centerTarget, base, count, maxStart]);
+
+  const effectiveStart = Math.max(0, Math.min(maxStart, centeredStart + panOffset));
+  const data = base.slice(effectiveStart, effectiveStart + count);
 
   // A wheel over the plot belongs to the chart: zoom it and stop the event so the
   // page does not scroll at the same time. Native listeners are required because
@@ -159,16 +201,37 @@ export function CandleChart({
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      setZoom((v) => Math.max(1, Math.min(5, v + (e.deltaY < 0 ? 0.25 : -0.25))));
+      if (!base.length || !ready) return;
+      const factor = e.deltaY < 0 ? 1.25 : 0.8;
+      const nextCount = Math.max(MIN_WINDOW, Math.min(MAX_WINDOW, Math.round(count * factor)));
+      if (nextCount === count) return;
+      // Keep the candle under the cursor at the same visual position.
+      const rect = node.getBoundingClientRect();
+      const plotLeft = 52;
+      const plotWidth = Math.max(40, rect.width - 52 - 64);
+      const slot = plotWidth / Math.max(1, data.length);
+      const cursorIdx = Math.floor((e.clientX - rect.left - plotLeft) / slot);
+      const absolute = effectiveStart + cursorIdx;
+      const ratio = nextCount / Math.max(1, count);
+      const nextStart = Math.max(
+        0,
+        Math.min(Math.max(0, base.length - nextCount), Math.round(absolute - cursorIdx * ratio)),
+      );
+      setVisibleCount(nextCount);
+      setPanOffset(nextStart - centeredStart);
     };
     node.addEventListener('wheel', onWheel, { passive: false });
     return () => node.removeEventListener('wheel', onWheel);
-  }, []);
+  }, [count, effectiveStart, centeredStart, base.length, data.length, ready]);
 
-  // Zoom/pan are clamped to the current candle range during render (see
-  // `count`/`start` below), so a run switch cannot leave them out of bounds and
-  // no reset effect is needed here.
-  const base: Candle[] = candles;
+  // Fetch the adjacent real window when the viewport reaches a loaded edge.
+  useEffect(() => {
+    if (!onLoadMore || !base.length) return;
+    if (hasMoreBefore !== false && effectiveStart <= EDGE_TRIGGER) onLoadMore('before');
+    if (hasMoreAfter !== false && effectiveStart + count >= base.length - EDGE_TRIGGER) {
+      onLoadMore('after');
+    }
+  }, [effectiveStart, count, base.length, onLoadMore, hasMoreBefore, hasMoreAfter]);
 
   if (status !== 'ready' || !base.length) {
     return (
@@ -185,20 +248,29 @@ export function CandleChart({
     );
   }
 
-  const count = Math.max(6, Math.round(base.length / zoom));
-  const start = clamp(pan, 0, Math.max(0, base.length - count));
-  const data = base.slice(start, start + count);
-
+  // Only trades that are actually inside the visible window may influence the
+  // price scale or draw markers: off-screen trades (or their PnL / IDs) must
+  // never distort the axis.
+  const viewStart = data.length ? data[0].t : 0;
+  const viewEnd = data.length ? data[data.length - 1].t : 0;
+  const visibleTrades = trades.filter(
+    (t) =>
+      (t.entryTime >= viewStart && t.entryTime <= viewEnd) ||
+      (t.exitTime >= viewStart && t.exitTime <= viewEnd) ||
+      (t.signal >= viewStart && t.signal <= viewEnd),
+  );
 
   const levels =
     trade && context
       ? [trade.entry, trade.sl, trade.tp]
       : overlay.includes('Trades')
-        ? trades.flatMap((t) => [t.entry, t.exit])
+        ? visibleTrades.flatMap((t) => [t.entry, t.exit])
         : [];
 
-  const lo = Math.min(...data.map((c) => c.l), ...levels) - 2;
-  const hi = Math.max(...data.map((c) => c.h), ...levels) + 2;
+  const candleLows = data.map((c) => c.l);
+  const candleHighs = data.map((c) => c.h);
+  const lo = Math.min(candleLows[0] ?? 0, ...candleLows, ...levels) - 2;
+  const hi = Math.max(candleHighs[0] ?? 0, ...candleHighs, ...levels) + 2;
 
   // Markers live in dedicated gutters above and below the candle region, so a
   // label can never sit on top of a candle body or wick.
@@ -345,8 +417,21 @@ export function CandleChart({
         tabIndex={0}
         role="button"
         aria-label={`${label} trade ${owner.id}`}
-        onClick={() => onSelect?.(owner.id - 1)}
-        onKeyDown={(e) => e.key === 'Enter' && onSelect?.(owner.id - 1)}
+        onClick={() => {
+          // Resolve the real trade index: archived runs do not use sequential
+          // ids, so `id - 1` would select the wrong trade.
+          const idx = trades.findIndex((x) => x.id === owner.id);
+          if (idx >= 0) onSelect?.(idx);
+          if (kind === 'Entry' || kind === 'Exit') {
+            onCenterTrade?.(owner);
+          }
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            const idx = trades.findIndex((x) => x.id === owner.id);
+            if (idx >= 0) onSelect?.(idx);
+          }
+        }}
       >
         {/* vertical connector: always on the candle axis, tip short of the wick */}
         {drawLen > 0 && (
@@ -378,94 +463,108 @@ export function CandleChart({
       </g>
     );
   };
-
-  const overlays = (context && trade ? [trade] : trades).flatMap((t) => {    const showSignals = context || overlay.includes('Signals');
-    const showTrades = context || overlay.includes('Trades');
-    const entryIdx = candleIndexAt(data, t.entryTime);
+  // Only trades inside the visible window produce markers: a 5,749-trade run
+  // would otherwise draw every marker on every frame.
+  const overlays = (context && trade ? [trade] : visibleTrades).flatMap((t) => {
     const nodes: React.ReactNode[] = [];
 
-    if (showSignals) {
+    if (context || overlay.includes('Signals')) {
       nodes.push(
         marker(t, t.signal, `${t.direction === 'LONG' ? 'L' : 'S'}${t.id}`, t.direction === 'LONG' ? green : red, false, 'Signal'),
       );
     }
-    if (showTrades && entryIdx !== null) {
-      // Location is carried by the tag itself: no standalone entry/exit dots,
-      // because an unexplained dot on a price chart is unreadable.
-      nodes.push(marker(t, t.entryTime, `E${t.id}`, blue, true, 'Entry'));
-      // Exit code mirrors the event guide: TP, SL, EO (short enough to stay compact).
-      const exitCode = t.reason === 'TP' ? 'TP' : t.reason === 'SL' ? 'SL' : 'EO';
+    if (context || overlay.includes('Trades')) {
+      const entryIdx = candleIndexAt(data, t.entryTime);
+      if (entryIdx !== null) {
+        nodes.push(
+          marker(t, t.entryTime, `E${t.id}`, blue, true, 'Entry'),
+        );
+      }
       nodes.push(
-        marker(t, t.exitTime, `${exitCode}${t.id}`, t.reason === 'TP' ? green : t.reason === 'SL' ? red : blue, false, 'Exit', t.reason),
+        marker(t, t.exitTime, `${t.reason === 'TP' ? 'TP' : t.reason === 'SL' ? 'SL' : 'EO'}${t.id}`, t.reason === 'TP' ? green : t.reason === 'SL' ? red : blue, false, 'Exit', t.reason),
       );
     }
-
-    if (context && t.signal !== undefined) {
-      const shadeIdx = candleIndexAt(data, t.signal);
-      // Real signal-availability time (archived). Never reconstructed from a
-      // fixed timeframe; if it is unknown, the marker is simply not drawn.
-      const availIdx = t.signalAvailable !== undefined ? candleIndexAt(data, t.signalAvailable) : null;
-      if (shadeIdx !== null) {
-        nodes.push(
-          <rect
-            key={`shade${t.id}`}
-            x={x(shadeIdx) - slot / 2}
-            y={pad.t}
-            width={slot}
-            height={plotH}
-            fill="var(--warning)"
-            opacity=".07"
-          />,
-        );
-      }
-      if (availIdx !== null) {
-        nodes.push(
-          <g key={`avail${t.id}`}>
-            <line
-              x1={x(availIdx)}
-              x2={x(availIdx)}
-              y1={pad.t}
-              y2={pad.t + plotH}
-              stroke={blue}
-              strokeDasharray="2 5"
-              opacity=".45"
-            />
-            <text x={x(availIdx) + 5} y={pad.t - 5} style={{ fontSize: 9.5, fill: blue }}>
-              Signal available
-            </text>
-          </g>,
-        );
-      }
-    }
-
     return nodes;
   });
-
   const hoverCandle = hover !== null ? data[hover] : null;
 
   return (
-    <div className="chart-wrap" ref={hostRef}>
+    <div
+      className="chart-wrap"
+      ref={hostRef}
+      data-candle-start={data.length ? new Date(data[0].t).toISOString() : ''}
+      data-candle-end={data.length ? new Date(data[data.length - 1].t).toISOString() : ''}
+      data-candle-count={data.length}
+      data-price-min={Number.isFinite(lo) ? lo : ''}
+      data-price-max={Number.isFinite(hi) ? hi : ''}
+    >
       <div className="chart-tools">
-        <button aria-label="Zoom in" onClick={() => setZoom((v) => Math.min(5, v + 0.5))}><Plus size={13} /></button>
-        <button aria-label="Zoom out" onClick={() => setZoom((v) => Math.max(1, v - 0.5))}><Minus size={13} /></button>
-        <button aria-label="Reset view" onClick={() => { setZoom(1); setPan(0); }}><RotateCcw size={13} /></button>
+        <button
+          aria-label="Zoom in"
+          onClick={() => setVisibleCount(Math.max(MIN_WINDOW, Math.min(MAX_WINDOW, Math.round(count / 1.25))))}
+        >
+          <Plus size={13} />
+        </button>
+        <button
+          aria-label="Zoom out"
+          onClick={() => setVisibleCount(Math.max(MIN_WINDOW, Math.min(MAX_WINDOW, Math.round(count * 1.25))))}
+        >
+          <Minus size={13} />
+        </button>
+        <button
+          aria-label="Reset view"
+          onClick={() => {
+            setVisibleCount(null);
+            setPanOffset(0);
+          }}
+        >
+          <RotateCcw size={13} />
+        </button>
       </div>
       <svg
         ref={ref}
         role="img"
         aria-label={context ? 'Selected trade candle context' : 'Interactive BID candlestick chart'}
-        onPointerDown={(e) => { drag.current = e.clientX; e.currentTarget.setPointerCapture(e.pointerId); }}
-        onPointerUp={() => { drag.current = null; }}
-        onPointerMove={(e) => {
-          const r = e.currentTarget.getBoundingClientRect();
-          if (!ready || slot <= 0) return;
-          setHover(clamp(Math.floor(((e.clientX - r.left) - pad.l) / slot), 0, data.length - 1));
-          if (drag.current !== null) {
-            setPan((v) => Math.max(0, v + Math.round((drag.current! - e.clientX) / 8)));
-            drag.current = e.clientX;
+        style={{ cursor: isDragging ? 'grabbing' : 'crosshair', touchAction: 'none', userSelect: 'none' }}
+        onPointerDown={(e) => {
+          if (e.button !== 0) return;
+          // Pointer capture is an optimisation, not a requirement: it throws for
+          // synthetic pointers (and can fail on some browsers), and an
+          // exception here would abort the drag before it starts.
+          try {
+            e.currentTarget.setPointerCapture(e.pointerId);
+          } catch {
+            /* no capture available: the drag still works via element events */
           }
+          setIsDragging(true);
+          dragStartRef.current = { x: e.clientX, start: effectiveStart };
         }}
-        onPointerLeave={() => setHover(null)}
+        onPointerMove={(e) => {
+          const rect = e.currentTarget.getBoundingClientRect();
+          if (!ready || slot <= 0) return;
+          // The ref is the source of truth for "a drag is in progress": it is
+          // updated synchronously, unlike React state, so the very first
+          // pointermove after pointerdown is already a pan.
+          if (dragStartRef.current === null) {
+            setHover(clamp(Math.floor(((e.clientX - rect.left) - pad.l) / slot), 0, data.length - 1));
+            return;
+          }
+          // Pan by the dragged pixel distance: one candle per slot width.
+          const deltaCandles = Math.round((e.clientX - dragStartRef.current.x) / slot);
+          const next = Math.max(0, Math.min(maxStart, dragStartRef.current.start - deltaCandles));
+          setPanOffset(next - centeredStart);
+        }}
+        onPointerUp={() => {
+          setIsDragging(false);
+          dragStartRef.current = null;
+        }}
+        onPointerCancel={() => {
+          setIsDragging(false);
+          dragStartRef.current = null;
+        }}
+        onPointerLeave={() => {
+          setHover(null);
+        }}
       >
         {ready && (
           <g>

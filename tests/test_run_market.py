@@ -242,11 +242,14 @@ class RunMarketTest(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertEqual(body["error"]["code"], "invalid_market_request")
 
-    def test_ticks_outside_coverage_is_structured_error(self):
+    def test_ticks_outside_coverage_is_an_empty_window(self):
+        # Navigation past the cached coverage is a truthful empty answer, not a
+        # failure: the chart must not log an error for every edge probe.
         status, body = self._get(
             "/runs/run_ok/ticks?start=2099-05-01T00:00:00Z&end=2099-05-02T00:00:00Z")
-        self.assertEqual(status, 400, body)
-        self.assertEqual(body["error"]["code"], "data_not_prepared")
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body.get("count"), 0)
+        self.assertEqual(body.get("ticks"), [])
 
     # ---- resolver unit --------------------------------------------------
 

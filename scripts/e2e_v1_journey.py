@@ -117,7 +117,17 @@ def main() -> int:
         set_input(cdp, '[aria-label="Run end date"]', "2025-01-02")
         cur = (re.search(r"Archived Run · (\S+) ·", cdp.evaluate("(document.querySelector('.run-status')||{}).textContent||''") or "") or [None, None])[1]
         cdp.evaluate(CLICK_RUN_JS)
-        ok &= check("price-term run completes", cdp.evaluate(f"({WAIT_NEW_RUN_JS})({json.dumps(cur or '')})", timeout=200))
+        completed = cdp.evaluate(f"({WAIT_NEW_RUN_JS})({json.dumps(cur or '')})", timeout=60)
+        if not completed:
+            # Diagnose: ask the bridge what the job did.
+            try:
+                import urllib.request as _u
+                with _u.urlopen("http://127.0.0.1:8765/run-jobs/active", timeout=10) as _r:
+                    _job = json.loads(_r.read().decode()).get("job") or {}
+                print("INFO active job:", json.dumps(_job)[:400])
+            except Exception as _exc:  # noqa: BLE001 - diagnostic only
+                print("INFO active job unavailable:", str(_exc)[:120])
+        ok &= check("price-term run completes", completed)
         cdp.pump(0.4)
         run_id = (re.search(r"Archived Run · (\S+) ·", cdp.evaluate("(document.querySelector('.run-status')||{}).textContent||''") or "") or [None, None])[1]
         ok &= check("result metrics render", cdp.evaluate(f"({WAIT_METRICS_JS})('Total PnL')"))

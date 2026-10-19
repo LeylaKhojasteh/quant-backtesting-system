@@ -6,6 +6,7 @@ data/
 
 # Archives
 *.zip
+*.rar
 
 # Python / notebook caches
 __pycache__/
@@ -32,3 +33,8 @@ runs/
 # Derived data engine cache (Parquet tick store). Rebuildable/disposable,
 # never committed — regenerate with `python -m src.data_engine build`.
 cache/
+
+# Frontend build output / generated types (rebuildable, machine specific)
+.next/
+dist/
+next-env.d.ts

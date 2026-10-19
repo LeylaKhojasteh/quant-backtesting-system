@@ -169,3 +169,163 @@ export function tradeCandleWindow(trade: Trade, timeframe: string, bars = 12): {
   const end = new Date(trade.exitTime + bars * step).toISOString();
   return { start, end, limit: bars * 2 + Math.ceil((trade.exitTime - trade.signal) / step) + 4 };
 }
+
+/** Never keep more than this many real candles in chart memory. */
+export const MAX_CANDLE_BUFFER = 1500;
+/** Candles shown in one viewport before zooming. */
+export const INITIAL_CANDLE_WINDOW = 250;
+/** Candles fetched per edge request. */
+const EDGE_CHUNK = 250;
+
+type CandleBuffer = {
+  key: string;
+  candles: Candle[];
+  timeframe: string | null;
+  hasBefore: boolean;
+  hasAfter: boolean;
+};
+
+/** Merge two candle lists by timestamp (no duplicates), chronologically. */
+export function mergeCandles(a: readonly Candle[], b: readonly Candle[]): Candle[] {
+  const byTime = new Map<number, Candle>();
+  for (const c of a) byTime.set(c.t, c);
+  for (const c of b) byTime.set(c.t, c);
+  return [...byTime.values()].sort((x, y) => x.t - y.t);
+}
+
+/**
+ * Navigable, bounded candle buffer for the Price Chart.
+ *
+ * - Initial load: the most recent {@link INITIAL_CANDLE_WINDOW} real candles of
+ *   the run (never the whole dataset).
+ * - `loadMore('before'|'after')` fetches the adjacent real window through the
+ *   existing run-scoped API, merges by timestamp, and evicts the far end so the
+ *   buffer never exceeds {@link MAX_CANDLE_BUFFER} candles.
+ * - Failures leave the current view untouched (no corruption, no demo data).
+ */
+export function useCandleWindow(
+  runId: string | null,
+  initialLimit = INITIAL_CANDLE_WINDOW,
+): {
+  candles: Candle[];
+  status: MarketStatus;
+  timeframe: string | null;
+  hasBefore: boolean;
+  hasAfter: boolean;
+  loading: boolean;
+  loadMore: (direction: 'before' | 'after') => void;
+} {
+  const key = runId ?? '';
+  const [state, setState] = useState<CandleBuffer | null>(null);
+  const [loading, setLoading] = useState(false);
+  const reqRef = useRef(0);
+  const bufferRef = useRef<Candle[]>([]);
+  const metaRef = useRef<{ timeframe: string | null; hasBefore: boolean; hasAfter: boolean }>({
+    timeframe: null,
+    hasBefore: true,
+    hasAfter: true,
+  });
+
+  useEffect(() => {
+    if (!runId) {
+      // No run: the derived state below already reports "idle" (the buffer of
+      // a previous run is ignored because its key no longer matches).
+      return;
+    }
+    let alive = true;
+    const req = ++reqRef.current;
+    getRunCandles(runId, { limit: initialLimit })
+      .then((res) => {
+        if (!alive || req !== reqRef.current) return;
+        const mapped = toCandles(res.candles);
+        bufferRef.current = mapped;
+        metaRef.current = { timeframe: res.timeframe, hasBefore: mapped.length > 0, hasAfter: true };
+        setState({
+          key: `${runId}|${initialLimit}`,
+          candles: mapped,
+          timeframe: res.timeframe,
+          hasBefore: mapped.length > 0,
+          hasAfter: true,
+        });
+      })
+      .catch(() => {
+        if (!alive || req !== reqRef.current) return;
+        bufferRef.current = [];
+        metaRef.current = { timeframe: null, hasBefore: false, hasAfter: false };
+        setState({ key: `${runId}|${initialLimit}`, candles: [], timeframe: null, hasBefore: false, hasAfter: false });
+      });
+    return () => {
+      alive = false;
+    };
+  }, [runId, initialLimit]);
+
+  const loadMore = (direction: 'before' | 'after') => {
+    if (!runId || loading) return;
+    const buffer = bufferRef.current;
+    if (!buffer.length) return;
+    const meta = metaRef.current;
+    if (direction === 'before' && !meta.hasBefore) return;
+    if (direction === 'after' && !meta.hasAfter) return;
+    const step = timeframeMs(meta.timeframe ?? '15min');
+    const first = buffer[0].t;
+    const last = buffer[buffer.length - 1].t;
+    const start = direction === 'before'
+      ? new Date(first - step * EDGE_CHUNK).toISOString()
+      : new Date(last + step).toISOString();
+    const end = direction === 'before'
+      ? new Date(first).toISOString()
+      : new Date(last + step * EDGE_CHUNK).toISOString();
+    setLoading(true);
+    const req = ++reqRef.current;
+    getRunCandles(runId, { start, end, limit: EDGE_CHUNK })
+      .then((res) => {
+        if (req !== reqRef.current) return;
+        const incoming = toCandles(res.candles);
+        if (!incoming.length) {
+          // No real candles in that direction: the run's coverage ends here.
+          metaRef.current = { ...metaRef.current, [direction === 'before' ? 'hasBefore' : 'hasAfter']: false };
+          setState((prev) => (prev ? { ...prev, [direction === 'before' ? 'hasBefore' : 'hasAfter']: false } : prev));
+          return;
+        }
+        const merged = mergeCandles(bufferRef.current, incoming);
+        // Evict from the far end so the viewport keeps its data and the
+        // buffer stays within MAX_CANDLE_BUFFER candles.
+        const trimmed = merged.length > MAX_CANDLE_BUFFER
+          ? (direction === 'before' ? merged.slice(merged.length - MAX_CANDLE_BUFFER) : merged.slice(0, MAX_CANDLE_BUFFER))
+          : merged;
+        bufferRef.current = trimmed;
+        const hasBefore = direction === 'before' ? true : metaRef.current.hasBefore;
+        const hasAfter = direction === 'after' ? true : metaRef.current.hasAfter;
+        metaRef.current = { timeframe: metaRef.current.timeframe, hasBefore, hasAfter };
+        setState({ key: `${runId}|${initialLimit}`, candles: trimmed, timeframe: metaRef.current.timeframe, hasBefore, hasAfter });
+      })
+      .catch(() => {
+        // A failed edge request must not corrupt the current view.
+        if (req === reqRef.current) {
+          metaRef.current = { ...metaRef.current, [direction === 'before' ? 'hasBefore' : 'hasAfter']: false };
+          setState((prev) => (prev ? { ...prev, [direction === 'before' ? 'hasBefore' : 'hasAfter']: false } : prev));
+        }
+      })
+      .finally(() => {
+        if (req === reqRef.current) setLoading(false);
+      });
+  };
+
+  const current = state && state.key.startsWith(`${key}|`) ? state : null;
+  const candles = current?.candles ?? [];
+  let status: MarketStatus = 'idle';
+  if (runId) {
+    if (candles.length) status = 'ready';
+    else if (current) status = 'unavailable';
+    else status = 'loading';
+  }
+  return {
+    candles,
+    status,
+    timeframe: current?.timeframe ?? null,
+    hasBefore: current?.hasBefore ?? false,
+    hasAfter: current?.hasAfter ?? false,
+    loading,
+    loadMore,
+  };
+}

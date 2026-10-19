@@ -23,6 +23,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.request
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -125,7 +126,7 @@ FETCH_RECORDER = """
 CLICK_TEXT_JS = """(([root,text]) => { const el=[...document.querySelectorAll(root)].find(b=>b.textContent.includes(text)); if(!el) return 'NO'; for (const t of ['pointerdown','mousedown','mouseup','click']) el.dispatchEvent(new MouseEvent(t,{bubbles:true,cancelable:true,view:window})); return 'OK'; })"""
 
 
-def part2(app: str, chrome_port: int) -> None:
+def part2(app: str, chrome_port: int, runs_dir: Path) -> None:
     chrome = launch_chrome(chrome_port)
     try:
         targets = wait_debugger(chrome_port)
@@ -163,7 +164,26 @@ def part2(app: str, chrome_port: int) -> None:
         check("no 'Equity Curve' title", "Equity Curve" not in body)
         check("price-term title present", "Cumulative Trade PnL" in body)
         check("no demo price leaked into run view", "2,799.84" not in body, "demo trade 1 entry absent")
-        check("real run price present", "2,626.08" in body or "2,626" in body, "archived trade 1 entry")
+        # Assert against the run that is ACTUALLY loaded (the app boots the
+        # newest successful run), not a hard-coded run id.
+        loaded_run = None
+        m = __import__("re").search(r"Archived Run · (\S+) ·",
+                                   cdp.evaluate(f"({TEXT_JS})('.run-status')") or "")
+        if m:
+            loaded_run = m.group(1)
+        loaded_price = None
+        if loaded_run:
+            try:
+                result_path = Path(runs_dir) / loaded_run / "result.json"
+                res = json.loads(result_path.read_text(encoding="utf-8"))
+                trades = res.get("trades") or []
+                if trades:
+                    loaded_price = f"{trades[0]['entry_price']:,.2f}"
+            except Exception as exc:  # noqa: BLE001 - diagnostic only
+                print("INFO loaded run result unavailable:", str(exc)[:120])
+        check("real run price present",
+              bool(loaded_price) and loaded_price in body,
+              f"run={loaded_run} price={loaded_price}")
 
         # v1.0.2 QA fix: header shows the requested range + a timeframe label;
         # PnL x-axis labels are thinned while every data point stays.
@@ -255,7 +275,7 @@ def main() -> int:
             urllib.request.urlopen(req, timeout=30).read()
         except urllib.error.HTTPError as e:
             print("INFO publish:", e.code, e.read()[:200])
-        part2(args.url, chrome_port)
+        part2(args.url, chrome_port, runs_dir)
     finally:
         if manifest_before is not None:
             manifest.write_text(manifest_before, encoding="utf-8")

@@ -127,6 +127,7 @@ def run_candles(runs_dir, run_id: str, public_dir, *,
     win_start, win_end = _window_bounds(market, start, end, limit=cap, timeframe=market["timeframe"])
     frame = None
     last_exc: Exception | None = None
+    empty_window = False
     for source in _source_candidates(market):
         try:
             frame = data_engine.load_candles_window(
@@ -134,9 +135,15 @@ def run_candles(runs_dir, run_id: str, public_dir, *,
                 start=win_start, end=win_end, limit=cap,
             )
             break
-        except (data_engine.PartitionMissingError, data_engine.CoverageError, data_engine.DataEngineError) as exc:
+        except data_engine.PartitionMissingError as exc:
+            # The derived candle cache is not prepared for this symbol/timeframe.
+            raise run_errors.DataNotPreparedError(str(exc)) from exc
+        except (data_engine.CoverageError, data_engine.DataEngineError) as exc:
+            # The window simply holds no candles (e.g. navigation past the
+            # cached coverage). That is a truthful empty answer, not a failure.
             last_exc = exc
-    if frame is None:
+            empty_window = True
+    if frame is None and not empty_window:
         raise run_errors.DataNotPreparedError(str(last_exc) if last_exc else "candles unavailable")
     candles = [
         {
@@ -150,7 +157,7 @@ def run_candles(runs_dir, run_id: str, public_dir, *,
             "ask_low": float(row.ask_low),
             "ask_close": float(row.ask_close),
         }
-        for row in frame.itertuples(index=False)
+        for row in (frame.itertuples(index=False) if frame is not None else [])
     ]
     return {
         "run_id": run_id,
@@ -172,8 +179,13 @@ def _load_ticks(market: dict, *, start, end, limit):
             return data_engine.load_ticks_window(
                 source, symbol=market["symbol"], start=start, end=end, limit=limit,
             )
-        except (data_engine.PartitionMissingError, data_engine.CoverageError, data_engine.DataEngineError) as exc:
+        except data_engine.PartitionMissingError as exc:
+            # The derived tick cache is not prepared for this symbol.
+            raise run_errors.DataNotPreparedError(str(exc)) from exc
+        except (data_engine.CoverageError, data_engine.DataEngineError) as exc:
+            # No ticks in this window: a truthful empty answer, not a failure.
             last_exc = exc
+            return None
     raise run_errors.DataNotPreparedError(str(last_exc) if last_exc else "ticks unavailable")
 
 
@@ -196,11 +208,12 @@ def run_ticks(runs_dir, run_id: str, public_dir, *,
         win_end = center + pd.Timedelta(milliseconds=max(1, int(after_ms)))
         read_cap = min(data_engine.MAX_TICK_WINDOW, max(cap * 4, cap + 200))
         frame = _load_ticks(market, start=str(win_start), end=str(win_end), limit=read_cap)
-        split = cap // 2
-        before = frame[frame["timestamp"] < center]
-        after = frame[frame["timestamp"] >= center]
-        frame = pd.concat([before.tail(split), after.head(cap - split)], ignore_index=True)
-        frame = frame.sort_values("timestamp", kind="stable").reset_index(drop=True)
+        if frame is not None:
+            split = cap // 2
+            before = frame[frame["timestamp"] < center]
+            after = frame[frame["timestamp"] >= center]
+            frame = pd.concat([before.tail(split), after.head(cap - split)], ignore_index=True)
+            frame = frame.sort_values("timestamp", kind="stable").reset_index(drop=True)
     else:
         if not start and not end:
             raise run_errors.InvalidMarketRequestError(
@@ -218,7 +231,7 @@ def run_ticks(runs_dir, run_id: str, public_dir, *,
             "ask_volume": float(row.ask_volume),
             "spread": float(row.ask) - float(row.bid),
         }
-        for row in frame.itertuples(index=False)
+        for row in (frame.itertuples(index=False) if frame is not None else [])
     ]
     return {
         "run_id": run_id,
