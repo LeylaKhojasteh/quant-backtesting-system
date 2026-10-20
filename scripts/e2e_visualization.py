@@ -30,6 +30,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from scripts.e2e_run_switch import e2e_main
 
 from scripts.e2e_run_switch import CDP, TEXT_JS, WAIT_SEL_JS, WAIT_TEXT_JS, launch_chrome, wait_debugger  # noqa: E402
 
@@ -127,9 +128,9 @@ CLICK_TEXT_JS = """(([root,text]) => { const el=[...document.querySelectorAll(ro
 
 
 def part2(app: str, chrome_port: int, runs_dir: Path) -> None:
-    chrome = launch_chrome(chrome_port)
+    chrome = launch_chrome()
     try:
-        targets = wait_debugger(chrome_port)
+        targets = wait_debugger(chrome.debug_port)
         page = next(t for t in targets if t.get("type") == "page")
         cdp = CDP(page["webSocketDebuggerUrl"])
         for dom in ("Page.enable", "Runtime.enable", "Log.enable", "Network.enable"):
@@ -290,4 +291,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(e2e_main(main))

@@ -28,6 +28,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from scripts.e2e_run_switch import e2e_main, launch_bridge, require_bridge_port_free
 
 from scripts.e2e_run_switch import (  # noqa: E402
     CDP,
@@ -172,7 +173,8 @@ def main() -> int:
     seed = ROOT / "runs" / "run_0001"
     if seed.is_dir():
         shutil.copytree(seed, runs_dir / "run_0001")
-    bridge = subprocess.Popen(
+    require_bridge_port_free()
+    bridge = launch_bridge(
         [sys.executable, "-m", "src.bridge", "--port", str(BRIDGE_PORT),
          "--runs", str(runs_dir), "--public", str(PUBLIC),
          "--strategy-dir", "tests/fixtures/strategies", "--data-dir", "data"],
@@ -182,8 +184,8 @@ def main() -> int:
     try:
         ok &= check("bridge starts locally", get_bridge_health(), BRIDGE_URL)
 
-        chrome = launch_chrome(9345)
-        targets = wait_debugger(9345)
+        chrome = launch_chrome()
+        targets = wait_debugger(chrome.debug_port)
         page = next(t for t in targets if t.get("type") == "page")
         cdp = CDP(page["webSocketDebuggerUrl"])
         for dom in ("Page.enable", "Runtime.enable", "Log.enable", "Network.enable"):
@@ -342,4 +344,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(e2e_main(main))

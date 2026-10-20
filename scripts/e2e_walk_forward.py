@@ -22,6 +22,7 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from scripts.e2e_run_switch import e2e_main, launch_bridge, require_bridge_port_free
 
 from scripts.e2e_run_switch import (  # noqa: E402
     CDP, TEXT_JS, WAIT_BADGE_JS, WAIT_SEL_JS, WAIT_TEXT_JS, launch_chrome, wait_debugger,
@@ -174,7 +175,8 @@ def main() -> int:
     shutil.copytree(FIXTURE, runs_dir / "run_0001")
     shutil.copytree(FIXTURE, runs_dir / "run_0002")
 
-    bridge = subprocess.Popen(
+    require_bridge_port_free()
+    bridge = launch_bridge(
         [sys.executable, "-m", "src.bridge", "--port", "8765",
          "--runs", str(runs_dir), "--public", str(PUBLIC),
          "--strategy-dir", str(strategy_dir), "--data-dir", str(data_dir),
@@ -184,8 +186,8 @@ def main() -> int:
     chrome = None
     try:
         ok &= check("bridge starts locally", health(), BRIDGE)
-        chrome = launch_chrome(9356)
-        t = wait_debugger(9356)
+        chrome = launch_chrome()
+        t = wait_debugger(chrome.debug_port)
         page = next(x for x in t if x.get("type") == "page")
         cdp = CDP(page["webSocketDebuggerUrl"])
         for dom in ("Page.enable", "Runtime.enable", "Log.enable", "Network.enable", "DOM.enable"):
@@ -334,4 +336,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(e2e_main(main))

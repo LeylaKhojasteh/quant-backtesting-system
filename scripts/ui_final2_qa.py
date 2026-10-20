@@ -11,6 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from scripts.e2e_run_switch import e2e_main
 
 from scripts.e2e_run_switch import CDP, TEXT_JS, WAIT_SEL_JS, launch_chrome, wait_debugger  # noqa: E402
 
@@ -58,9 +59,9 @@ def tooltip_text(cdp):
 
 def main() -> int:
     ok = True
-    chrome = launch_chrome(9388)
+    chrome = launch_chrome()
     try:
-        t = wait_debugger(9388)
+        t = wait_debugger(chrome.debug_port)
         page = next(x for x in t if x.get("type") == "page")
         cdp = CDP(page["webSocketDebuggerUrl"])
         for dom in ("Page.enable", "Runtime.enable", "Log.enable", "DOM.enable"):
@@ -142,4 +143,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(e2e_main(main))
