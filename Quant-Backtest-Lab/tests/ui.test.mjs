@@ -487,11 +487,31 @@ describe('price chart interaction & windowing (v1.0.3)', () => {
       'marker overlay limited to visible trades');
   });
 
-  test('a single visible-count drives zoom (wheel and buttons cannot cancel)', () => {
+  test('a single timestamp-anchored viewport drives zoom and pan', () => {
     const charts = file('charts.tsx');
-    assert.ok(charts.includes('visibleCount'), 'single visible-count state');
+    assert.ok(charts.includes('anchorTs'), 'viewport is anchored to a candle timestamp');
+    assert.ok(charts.includes('setView('), 'zoom/wheel/pan update the single viewport');
     assert.ok(!/setZoom\(/.test(charts), 'no separate zoom state to cancel the count');
-    assert.ok(charts.includes('setVisibleCount'), 'zoom in/out and wheel update the count');
+    assert.ok(!charts.includes('panOffset'), 'no index offset tied to the moving buffer');
+    assert.ok(!charts.includes('autoCount'), 'the count is not recomputed as the buffer grows');
+    // Initial viewport frozen once per run, and the range derived from the anchor.
+    assert.ok(charts.includes('setInitialView(next)'), 'initial viewport captured once');
+    assert.ok(charts.includes('view.key !== seriesKey'), 'a new series re-initialises the viewport');
+    assert.ok(charts.includes('const anchorTs = view?.anchorTs'), 'start index derives from the anchor');
+    assert.ok(charts.includes('base.findIndex((c) => c.t >= anchorTs)'), 'anchor resolved by timestamp');
+  });
+
+  test('chart series identity comes from the parent, not from candle data', () => {
+    const charts = file('charts.tsx');
+    assert.ok(charts.includes('viewportKey'), 'chart accepts an explicit series key');
+    assert.ok(!charts.includes('base[base.length - 1].t'), 'no key derived from the last candle');
+    assert.ok(!charts.includes('runKey'), 'the timestamp-derived runKey is gone');
+    const view = file('price-chart-view.tsx');
+    assert.ok(view.includes('viewportKey(isArchived ? runId : null)'),
+      'archived run id is part of the key; fixture mode stays separate');
+    const page = file('page.tsx');
+    assert.ok(page.includes('makeViewportKey(archivedRunId'),
+      'inspector chart is keyed by the archived run id');
   });
 
   test('drag pans from a synchronous ref and survives capture failure', () => {
@@ -501,7 +521,10 @@ describe('price chart interaction & windowing (v1.0.3)', () => {
     assert.ok(charts.includes('setPointerCapture'), 'pointer capture is used');
     assert.ok(/try \{\s*\n?\s*e\.currentTarget\.setPointerCapture/.test(charts),
       'pointer capture failure must not abort the drag');
-    assert.ok(charts.includes('setPanOffset(next - centeredStart)'), 'drag updates the viewport');
+    assert.ok(charts.includes('anchorTs: at(startIndex).t'),
+      'the drag starts from a candle timestamp, not an index');
+    assert.ok(charts.includes('anchorTs: at(next).t'),
+      'the drag writes the new viewport anchor');
   });
 
   test('trade selection centers the viewport through an explicit request', () => {

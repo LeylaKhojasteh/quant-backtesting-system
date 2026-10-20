@@ -138,6 +138,7 @@ export function CandleChart({
   onLoadMore,
   hasMoreBefore,
   hasMoreAfter,
+  viewportKey = '',
 }: {
   /** Real BID candles from the run's market context (never synthesized). */
   candles: Candle[];
@@ -156,16 +157,19 @@ export function CandleChart({
   onLoadMore?: (direction: 'before' | 'after') => void;
   hasMoreBefore?: boolean;
   hasMoreAfter?: boolean;
+  /** Explicit identity of the shown series (run id), owned by the parent. */
+  viewportKey?: string;
 }) {
-  // Visible candle count (null = automatic: the standard window, capped by
-  // what is actually loaded). Zoom in/out and the mouse wheel both move this
-  // single number, so they can never cancel each other out.
-  const [visibleCount, setVisibleCount] = useState<number | null>(null);
+  // Viewport model: the visible range is (anchorTs, count), where anchorTs is
+  // the timestamp of the first visible candle. Anchoring to a timestamp — not
+  // to a moving array index — keeps the visible range fixed while the candle
+  // buffer grows at either edge.
+  const [view, setView] = useState<{ key: string; anchorTs: number; count: number } | null>(null);
+  const [initialView, setInitialView] = useState<{ key: string; anchorTs: number; count: number } | null>(null);
+  const [userNonce, setUserNonce] = useState(-1);
   const [hover, setHover] = useState<number | null>(null);
-  /** Manual pan offset relative to the anchored position (pure derivation). */
-  const [panOffset, setPanOffset] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
-  const dragStartRef = useRef<{ x: number; start: number } | null>(null);
+  const dragStartRef = useRef<{ x: number; anchorTs: number } | null>(null);
   const { ref, width, height, ready } = useElementSize();
 
   const base: Candle[] = candles;
@@ -174,22 +178,58 @@ export function CandleChart({
   /** How close to a loaded edge triggers fetching the adjacent real window. */
   const EDGE_TRIGGER = 40;
 
-  // Default position: the newest loaded real candles. A trade-selection
-  // request overrides it and re-centers on that trade's timestamp.
-  const autoCount = Math.min(INITIAL_CANDLE_WINDOW, base.length);
-  const count = Math.max(MIN_WINDOW, Math.min(MAX_WINDOW, visibleCount ?? autoCount));
-  const maxStart = Math.max(0, base.length - count);
+  // The series identity comes from the parent (archived run id / fixture); it
+  // is never inferred from the candles, so two runs that end at the same
+  // timestamp stay distinct.
+  const seriesKey = viewportKey;
+  const at = useCallback(
+    (i: number) => base[Math.max(0, Math.min(i, Math.max(0, base.length - 1)))],
+    [base],
+  );
+  const maxStart = useCallback((n: number) => Math.max(0, base.length - n), [base.length]);
 
-  const centeredStart = useMemo(() => {
+  // Freeze the initial viewport once per loaded run, then follow explicit
+  // centering requests. A centering request is applied once per nonce; after
+  // the user interacts (drag/zoom/reset) the view stays under their control.
+  useEffect(() => {
+    if (!base.length) return;
+    if (!view || view.key !== seriesKey) {
+      const count = Math.min(INITIAL_CANDLE_WINDOW, base.length);
+      const next = { key: seriesKey, anchorTs: at(base.length - count).t, count };
+      // The initial viewport is frozen once per loaded run from data that is
+      // already present; this is the only state sync the effect performs.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setView(next);
+      setInitialView(next);
+      return;
+    }
+    if (centerTarget && centerTarget.nonce !== userNonce) {
+      const count = view.count;
+      const idx = base.findIndex((c) => c.t >= centerTarget.t);
+      const centre = idx === -1 ? base.length - 1 : idx;
+      const start = Math.max(0, Math.min(centre - Math.floor(count / 2), maxStart(count)));
+      setView({ key: seriesKey, anchorTs: at(start).t, count });
+      setUserNonce(centerTarget.nonce);
+    }
+  }, [base, seriesKey, view, centerTarget, userNonce, at, maxStart]);
+
+  const count = Math.max(
+    MIN_WINDOW,
+    Math.min(MAX_WINDOW, view?.count ?? Math.min(INITIAL_CANDLE_WINDOW, base.length)),
+  );
+
+  // Index of the first visible candle for the current anchor. Buffer growth at
+  // either edge changes this index but not the visible timestamps.
+  const startIndex = useMemo(() => {
     if (!base.length) return 0;
-    if (!centerTarget) return maxStart; // newest real candles
-    let idx = base.findIndex((c) => c.t >= centerTarget.t);
-    if (idx === -1) idx = base.length - 1;
-    return Math.max(0, Math.min(maxStart, idx - Math.floor(count / 2)));
-  }, [centerTarget, base, count, maxStart]);
+    const anchorTs = view?.anchorTs;
+    if (anchorTs === undefined) return Math.max(0, base.length - count);
+    let i = base.findIndex((c) => c.t >= anchorTs);
+    if (i === -1) i = base.length - 1;
+    return Math.max(0, Math.min(i, maxStart(count)));
+  }, [base, view?.anchorTs, count, maxStart]);
 
-  const effectiveStart = Math.max(0, Math.min(maxStart, centeredStart + panOffset));
-  const data = base.slice(effectiveStart, effectiveStart + count);
+  const data = base.slice(startIndex, startIndex + count);
 
   // A wheel over the plot belongs to the chart: zoom it and stop the event so the
   // page does not scroll at the same time. Native listeners are required because
@@ -211,27 +251,28 @@ export function CandleChart({
       const plotWidth = Math.max(40, rect.width - 52 - 64);
       const slot = plotWidth / Math.max(1, data.length);
       const cursorIdx = Math.floor((e.clientX - rect.left - plotLeft) / slot);
-      const absolute = effectiveStart + cursorIdx;
+      const absolute = startIndex + cursorIdx;
       const ratio = nextCount / Math.max(1, count);
       const nextStart = Math.max(
         0,
-        Math.min(Math.max(0, base.length - nextCount), Math.round(absolute - cursorIdx * ratio)),
+        Math.min(maxStart(nextCount), Math.round(absolute - cursorIdx * ratio)),
       );
-      setVisibleCount(nextCount);
-      setPanOffset(nextStart - centeredStart);
+      setUserNonce(centerTarget?.nonce ?? -1);
+      setView({ key: seriesKey, anchorTs: at(nextStart).t, count: nextCount });
     };
     node.addEventListener('wheel', onWheel, { passive: false });
     return () => node.removeEventListener('wheel', onWheel);
-  }, [count, effectiveStart, centeredStart, base.length, data.length, ready]);
+  }, [count, startIndex, base, data.length, ready, seriesKey, centerTarget?.nonce, at, maxStart]);
 
   // Fetch the adjacent real window when the viewport reaches a loaded edge.
+  // The viewport is timestamp-anchored, so prepending candles never shifts it.
   useEffect(() => {
     if (!onLoadMore || !base.length) return;
-    if (hasMoreBefore !== false && effectiveStart <= EDGE_TRIGGER) onLoadMore('before');
-    if (hasMoreAfter !== false && effectiveStart + count >= base.length - EDGE_TRIGGER) {
+    if (hasMoreBefore !== false && startIndex <= EDGE_TRIGGER) onLoadMore('before');
+    if (hasMoreAfter !== false && startIndex + count >= base.length - EDGE_TRIGGER) {
       onLoadMore('after');
     }
-  }, [effectiveStart, count, base.length, onLoadMore, hasMoreBefore, hasMoreAfter]);
+  }, [startIndex, count, base.length, onLoadMore, hasMoreBefore, hasMoreAfter]);
 
   if (status !== 'ready' || !base.length) {
     return (
@@ -501,21 +542,30 @@ export function CandleChart({
       <div className="chart-tools">
         <button
           aria-label="Zoom in"
-          onClick={() => setVisibleCount(Math.max(MIN_WINDOW, Math.min(MAX_WINDOW, Math.round(count / 1.25))))}
+          onClick={() => {
+            const nextCount = Math.max(MIN_WINDOW, Math.min(MAX_WINDOW, Math.round(count / 1.25)));
+            setUserNonce(centerTarget?.nonce ?? -1);
+            setView({ key: seriesKey, anchorTs: at(startIndex).t, count: nextCount });
+          }}
         >
           <Plus size={13} />
         </button>
         <button
           aria-label="Zoom out"
-          onClick={() => setVisibleCount(Math.max(MIN_WINDOW, Math.min(MAX_WINDOW, Math.round(count * 1.25))))}
+          onClick={() => {
+            const nextCount = Math.max(MIN_WINDOW, Math.min(MAX_WINDOW, Math.round(count * 1.25)));
+            setUserNonce(centerTarget?.nonce ?? -1);
+            setView({ key: seriesKey, anchorTs: at(startIndex).t, count: nextCount });
+          }}
         >
           <Minus size={13} />
         </button>
         <button
           aria-label="Reset view"
           onClick={() => {
-            setVisibleCount(null);
-            setPanOffset(0);
+            if (!initialView) return;
+            setUserNonce(centerTarget?.nonce ?? -1);
+            setView(initialView);
           }}
         >
           <RotateCcw size={13} />
@@ -537,7 +587,9 @@ export function CandleChart({
             /* no capture available: the drag still works via element events */
           }
           setIsDragging(true);
-          dragStartRef.current = { x: e.clientX, start: effectiveStart };
+          // Anchor the drag to a timestamp so a window arriving mid-drag does
+          // not change which candle the drag started from.
+          dragStartRef.current = { x: e.clientX, anchorTs: at(startIndex).t };
         }}
         onPointerMove={(e) => {
           const rect = e.currentTarget.getBoundingClientRect();
@@ -551,8 +603,11 @@ export function CandleChart({
           }
           // Pan by the dragged pixel distance: one candle per slot width.
           const deltaCandles = Math.round((e.clientX - dragStartRef.current.x) / slot);
-          const next = Math.max(0, Math.min(maxStart, dragStartRef.current.start - deltaCandles));
-          setPanOffset(next - centeredStart);
+          const anchorIdx = base.findIndex((c) => c.t >= dragStartRef.current!.anchorTs);
+          const from = anchorIdx === -1 ? startIndex : anchorIdx;
+          const next = Math.max(0, Math.min(maxStart(count), from - deltaCandles));
+          setUserNonce(centerTarget?.nonce ?? -1);
+          setView({ key: seriesKey, anchorTs: at(next).t, count });
         }}
         onPointerUp={() => {
           setIsDragging(false);
