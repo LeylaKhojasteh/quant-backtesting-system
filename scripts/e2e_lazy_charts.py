@@ -80,6 +80,28 @@ def count_calls(cdp, kind):
     return len([u for u in urls if kind in u])
 
 
+def settle_requests(cdp, quiet=1.2, timeout=8.0):
+    """Wait until no new fetch has been recorded for `quiet` seconds.
+
+    Edge loading from the standalone chart can still be in flight when the
+    view is switched; this prevents counting that request as an inspector
+    request.
+    """
+    end = time.time() + timeout
+    last = None
+    stable_since = time.time()
+    n = 0
+    while time.time() < end:
+        n = int(cdp.evaluate("(window.__fetches||[]).length") or 0)
+        if n != last:
+            last = n
+            stable_since = time.time()
+        elif time.time() - stable_since >= quiet:
+            return n
+        time.sleep(0.2)
+    return n
+
+
 def wait_chart(cdp, timeout=45):
     return cdp.evaluate(
         "(()=>new Promise(res=>{const ok=()=>{const w=document.querySelector('.chart-stage .chart-wrap');"
@@ -134,21 +156,34 @@ def main() -> int:
         check("candles requested only after Load", after_load > 0, f"{after_load} calls")
 
         # --- interactions ------------------------------------------------------
+        cdp.evaluate("(()=>{const g=document.querySelector('.chart-stage');if(g)g.scrollIntoView({block:'center'});return 'ok'})()")
+        time.sleep(0.5)
         v0 = cdp.evaluate(VIEW)
         check("chart exposes a real window", bool(v0) and v0["count"] > 0, json.dumps(v0))
         if not v0 or not v0["count"]:
             raise RuntimeError("standalone chart has no candles")
 
-        cdp.evaluate("(()=>{const g=document.querySelector('.chart-stage');if(g)g.scrollIntoView({block:'center'});return 'ok'})()")
-        time.sleep(0.5)
-        v0 = cdp.evaluate(VIEW)
-        rect = v0["rect"]
+        # 1) the initial count is frozen: automatic edge loading must not change
+        #    the visible range (no re-computation from a growing buffer).
+        settle_requests(cdp)
+        v_stable = cdp.evaluate(VIEW)
+        check("initial count does not change with automatic edge loading",
+              v_stable["count"] == v0["count"], f"{v0['count']} -> {v_stable['count']}")
+        check("automatic edge loading does not jump the viewport",
+              v_stable["start"] == v0["start"] and v_stable["end"] == v0["end"],
+              f"{v0['start']}..{v0['end']} -> {v_stable['start']}..{v_stable['end']}")
+
+        rect = v_stable["rect"]
         cx, cy = rect["x"] + rect["w"] / 2, rect["y"] + rect["h"] / 2
 
+        # 2) a drag really moves the viewport timestamp (not just the buffer).
         cdp.evaluate(f"({DRAG})({json.dumps([cx - 150, cy, cx + 150, cy])})")
         time.sleep(0.5)
         v1 = cdp.evaluate(VIEW)
-        check("pan changes the visible range", v1["start"] != v0["start"], f"{v0['start']} -> {v1['start']}")
+        check("drag moves the viewport timestamp", v1["start"] != v_stable["start"],
+              f"{v_stable['start']} -> {v1['start']}")
+        check("drag keeps the candle count", v1["count"] == v_stable["count"],
+              f"{v_stable['count']} -> {v1['count']}")
 
         cdp.evaluate(f"({WHEEL})({json.dumps([cx, cy, -120])})")
         time.sleep(0.5)
@@ -164,12 +199,40 @@ def main() -> int:
         v4 = cdp.evaluate(VIEW)
         check("zoom-out button works", v4["count"] != v3["count"], f"{v3['count']} -> {v4['count']}")
 
+        # 3) reset returns exactly to the initial viewport.
         cdp.evaluate(f"({CLICK_ARIA})('Reset view')")
         time.sleep(0.5)
         v5 = cdp.evaluate(VIEW)
-        check("reset restores the viewport", v5["start"] != v1["start"] or v5["count"] != v1["count"],
-              f"{v5['start']} count={v5['count']}")
+        check("reset restores the initial viewport",
+              v5["start"] == v0["start"] and v5["count"] == v0["count"],
+              f"{v5['start']} count={v5['count']} (expected {v0['start']} count={v0['count']})")
 
+        # 4) panning to the head triggers a real edge load without a jump: the
+        #    visible range right after the drag must survive the prepend.
+        calls_before_drag = count_calls(cdp, "/candles")
+        drags = 0
+        prev = v5["start"]
+        for _ in range(6):
+            cdp.evaluate(f"({DRAG})({json.dumps([cx - 420, cy, cx + 420, cy])})")
+            time.sleep(0.35)
+            drags += 1
+            now = cdp.evaluate(VIEW)
+            if now["start"] == prev:
+                break
+            prev = now["start"]
+        v_head = cdp.evaluate(VIEW)
+        settle_requests(cdp, quiet=1.2, timeout=10.0)
+        v_head_after = cdp.evaluate(VIEW)
+        calls_after = count_calls(cdp, "/candles")
+        check("panning to the head requests more real candles", calls_after > calls_before_drag,
+              f"{calls_before_drag} -> {calls_after} ({drags} drags)")
+        check("edge loading does not jump the viewport",
+              v_head_after["start"] == v_head["start"]
+              and v_head_after["end"] == v_head["end"]
+              and v_head_after["count"] == v_head["count"],
+              f"{v_head['start']}..{v_head['end']} -> {v_head_after['start']}..{v_head_after['end']}")
+
+        # 5) centering a trade moves the viewport.
         before_center = cdp.evaluate(VIEW)["start"]
         check("next trade centers the chart", cdp.evaluate(f"({CLICK_ARIA})('Next trade')") == "OK")
         time.sleep(0.7)
@@ -184,10 +247,14 @@ def main() -> int:
         check("fullscreen closes", cdp.evaluate("!document.querySelector('.panel.is-fullscreen')"))
 
         # --- Trade Inspector: also lazy ---------------------------------------
+        # Let the standalone chart's edge loading settle before switching, so a
+        # still-in-flight chart request is not mistaken for an inspector fetch.
+        settle_requests(cdp)
         before_inspector = count_calls(cdp, "/candles")
         check("Trade Inspector opens", cdp.evaluate(f"({CLICK})(['.navigation button','Trade Inspector'])" ) == "OK")
         check("inspector shows lazy prompt", cdp.evaluate(f"({WAIT_SEL_JS})('.large-debugger .chart-load')"))
-        time.sleep(0.8)
+        time.sleep(1.0)
+        settle_requests(cdp, quiet=1.0, timeout=6.0)
         check("no candle request before inspector Load",
               count_calls(cdp, "/candles") == before_inspector,
               f"{before_inspector} -> {count_calls(cdp, '/candles')}")
