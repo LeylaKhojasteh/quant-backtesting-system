@@ -20,6 +20,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from scripts.e2e_run_switch import e2e_main, launch_bridge, require_bridge_port_free
 
 from scripts.e2e_run_switch import (  # noqa: E402
     CDP, TEXT_JS, WAIT_BADGE_JS, WAIT_SEL_JS, WAIT_TEXT_JS, launch_chrome, wait_debugger,
@@ -121,15 +122,16 @@ def main() -> int:
     log = open(tmp / "bridge.log", "w")
 
     def start_bridge():
-        return subprocess.Popen(
+        require_bridge_port_free()
+        return launch_bridge(
             [sys.executable, "-m", "src.bridge", "--port", "8765", "--runs", str(runs),
              "--public", str(PUBLIC), "--strategy-dir", str(strategy), "--data-dir", str(ROOT / "data"),
              "--studies", str(tmp / "studies"), "--walkforwards", str(tmp / "wf"), "--montecarlo", str(tmp / "mc")],
             cwd=str(ROOT), stdout=log, stderr=subprocess.STDOUT)
 
     def open_app():
-        chrome = launch_chrome(9370)
-        t = wait_debugger(9370)
+        chrome = launch_chrome()
+        t = wait_debugger(chrome.debug_port)
         page = next(x for x in t if x.get("type") == "page")
         cdp = CDP(page["webSocketDebuggerUrl"])
         for dom in ("Page.enable", "Runtime.enable", "Log.enable", "Network.enable", "DOM.enable"):
@@ -248,4 +250,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(e2e_main(main))

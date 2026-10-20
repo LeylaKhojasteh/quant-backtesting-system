@@ -26,6 +26,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from scripts.e2e_run_switch import e2e_main, launch_bridge, require_bridge_port_free
 
 from scripts.e2e_run_switch import (  # noqa: E402
     CDP, TEXT_JS, WAIT_BADGE_JS, WAIT_SEL_JS, WAIT_TEXT_JS, launch_chrome, wait_debugger,
@@ -138,7 +139,8 @@ def main() -> int:
     (strat / "slow_signal.py").write_text(SLOW_STRATEGY, encoding="utf-8")
     shutil.copy(ROOT / "tests" / "fixtures" / "strategies" / "threshold_direction.py",
                 strat / "threshold_direction.py")
-    bridge = subprocess.Popen(
+    require_bridge_port_free()
+    bridge = launch_bridge(
         [sys.executable, "-m", "src.bridge", "--port", "8765", "--runs", str(runs),
          "--public", str(PUBLIC), "--data-dir", str(ROOT / "data"),
          "--strategy-dir", str(strat)],
@@ -146,8 +148,8 @@ def main() -> int:
     chrome = None
     try:
         ok &= check("bridge starts", health(), BRIDGE)
-        chrome = launch_chrome(9412)
-        t = wait_debugger(9412)
+        chrome = launch_chrome()
+        t = wait_debugger(chrome.debug_port)
         page = next(x for x in t if x.get("type") == "page")
         cdp = CDP(page["webSocketDebuggerUrl"])
         for dom in ("Page.enable", "Runtime.enable", "Log.enable", "Network.enable"):
@@ -401,4 +403,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(e2e_main(main))

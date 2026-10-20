@@ -15,6 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from scripts.e2e_run_switch import e2e_main, launch_bridge, require_bridge_port_free
 
 from scripts.e2e_run_switch import CDP, WAIT_SEL_JS, launch_chrome, wait_debugger  # noqa: E402
 
@@ -72,7 +73,8 @@ def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="qbl-tfmap-"))
     runs = tmp / "runs"; runs.mkdir()
     pub = tmp / "public"; pub.mkdir()
-    bridge = subprocess.Popen(
+    require_bridge_port_free()
+    bridge = launch_bridge(
         [sys.executable, "-m", "src.bridge", "--port", "8765", "--runs", str(runs), "--public", str(pub),
          "--data-dir", str(ROOT / "data"), "--strategy-dir", str(tmp / "strat"),
          "--studies", str(tmp / "st"), "--walkforwards", str(tmp / "wf"), "--montecarlo", str(tmp / "mc")],
@@ -87,8 +89,8 @@ def main() -> int:
                 break
             except Exception:
                 time.sleep(0.3)
-        chrome = launch_chrome(9396)
-        t = wait_debugger(9396)
+        chrome = launch_chrome()
+        t = wait_debugger(chrome.debug_port)
         page = next(x for x in t if x.get("type") == "page")
         cdp = CDP(page["webSocketDebuggerUrl"])
         for dom in ("Page.enable", "Runtime.enable", "Log.enable", "Network.enable", "DOM.enable"):
@@ -139,4 +141,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(e2e_main(main))

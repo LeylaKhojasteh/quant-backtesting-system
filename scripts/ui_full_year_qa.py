@@ -17,6 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from scripts.e2e_run_switch import e2e_main, launch_bridge, require_bridge_port_free
 
 os.environ.setdefault("no_proxy", "127.0.0.1,localhost")
 os.environ.setdefault("NO_PROXY", "127.0.0.1,localhost")
@@ -63,7 +64,8 @@ def main() -> int:
     files_before = set(p.name for p in PUBLIC.glob("runs-*-result.json"))
     tmp = Path(tempfile.mkdtemp(prefix="qbl-fy-ui-"))
     runs = tmp / "runs"; runs.mkdir()
-    bridge = subprocess.Popen(
+    require_bridge_port_free()
+    bridge = launch_bridge(
         [sys.executable, "-m", "src.bridge", "--port", "8765", "--runs", str(runs), "--public", str(PUBLIC),
          "--data-dir", str(ROOT / "data"), "--strategy-dir", str(tmp / "strat"),
          "--studies", str(tmp / "st"), "--walkforwards", str(tmp / "wf"), "--montecarlo", str(tmp / "mc")],
@@ -93,8 +95,8 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001
             ok &= check("standalone report renders", False, str(exc))
 
-        chrome = launch_chrome(9404)
-        t = wait_debugger(9404)
+        chrome = launch_chrome()
+        t = wait_debugger(chrome.debug_port)
         page = next(x for x in t if x.get("type") == "page")
         cdp = CDP(page["webSocketDebuggerUrl"])
         for dom in ("Page.enable", "Runtime.enable", "Log.enable", "DOM.enable"):
@@ -149,4 +151,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(e2e_main(main))
