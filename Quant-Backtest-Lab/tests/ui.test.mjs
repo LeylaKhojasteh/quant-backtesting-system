@@ -260,10 +260,11 @@ describe('real market visualization (v1.0.2)', () => {
     assert.ok(!/from '\.\/demo'/.test(charts), 'charts.tsx must not import demo market data');
     assert.ok(charts.includes('candles: Candle[]'), 'CandleChart takes real candles as a prop');
     assert.ok(charts.includes('Market candles unavailable'), 'explicit unavailable state, no demo fallback');
-    const page = file('page.tsx');
-    assert.ok(page.includes('useRunCandles'), 'page fetches real candles for the run');
-    assert.ok(page.includes('chartCandles'), 'page passes real candles to the chart');
-    assert.ok(page.includes('candles={chartCandles}'), 'CandleChart receives real candles');
+    // v1.0.3 lazy view: the standalone Price Chart owns the candle data.
+    const view = file('price-chart-view.tsx');
+    assert.ok(view.includes('useCandleWindow'), 'standalone view fetches real candles for the run');
+    assert.ok(view.includes('candles={candles}'), 'CandleChart receives the real candle window');
+    assert.ok(view.includes('onLoadMore='), 'edge loading preserved');
   });
 
   test('Price Chart markers come from the current BacktestRun', () => {
@@ -507,9 +508,12 @@ describe('price chart interaction & windowing (v1.0.3)', () => {
     const charts = file('charts.tsx');
     assert.ok(charts.includes('centerTarget'), 'chart accepts a centering request');
     assert.ok(charts.includes('onCenterTrade'), 'chart reports a centering request');
+    // v1.0.3 lazy view owns the centering request.
+    const view = file('price-chart-view.tsx');
+    assert.ok(view.includes('centerTarget={centerTarget}'), 'view passes the centering request');
+    assert.ok(view.includes('setCenterTarget'), 'view centers on the selected trade');
+    assert.ok(!view.includes('windowStartRef'), 'no ref-based external window control');
     const page = file('page.tsx');
-    assert.ok(page.includes('centerTarget={centerTarget}'), 'page passes the centering request');
-    assert.ok(page.includes('onCenterTrade={centerChartOnTrade}'), 'page handles centering');
     assert.ok(!page.includes('windowStartRef'), 'no ref-based external window control');
   });
 
@@ -528,5 +532,43 @@ describe('price chart interaction & windowing (v1.0.3)', () => {
     assert.ok(!/from '\.\/demo'/.test(charts), 'chart does not import demo market data');
     const market = file('run-market.ts');
     assert.ok(!/from '\.\/demo'/.test(market), 'market hook does not import demo data');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Lazy charts: the main page stays light; charts mount only after Load Chart
+// ---------------------------------------------------------------------------
+describe('lazy chart loading (main page)', () => {
+  let allFiles;
+  const file = (name) => allFiles.get(path.join(appDir, name)) || '';
+
+  test('setup: read app sources', async () => {
+    allFiles = await readAllTsxFiles();
+    assert.ok(allFiles.size > 0);
+  });
+
+  test('main page no longer mounts the price chart or the trade log table', () => {
+    const page = file('page.tsx');
+    assert.ok(!page.includes('title="Price Chart"'), 'no main-page price chart');
+    assert.ok(!page.includes('overview-trade-log'), 'no main-page trade log table');
+    assert.ok(!page.includes('useCandleWindow'), 'no main-page candle request');
+    assert.ok(page.includes('charts-grid charts-single'), 'Cumulative PnL spans the content area');
+  });
+
+  test('standalone price chart is lazy', () => {
+    const view = file('price-chart-view.tsx');
+    assert.ok(view.includes('if (!loaded)'), 'renders a prompt before loading');
+    assert.ok(view.includes('Load Chart'), 'explicit Load Chart control');
+    assert.ok(view.includes('useCandleWindow(loaded ? runId : null)'), 'no candle fetch before Load');
+    assert.ok(view.includes('chart-stage'), 'bounded chart container');
+    assert.ok(view.includes('FullscreenPanel'), 'fullscreen preserved');
+  });
+
+  test('trade inspector chart is lazy and bounded', () => {
+    const page = file('page.tsx');
+    assert.ok(page.includes('chartLoaded'), 'inspector chart gated');
+    assert.ok(page.includes('onLoadChart'), 'inspector exposes Load Chart');
+    assert.ok(page.includes('inspectorDataReady?archivedRunId:null'), 'no inspector candle request before Load');
+    assert.ok(page.includes('chart-stage'), 'inspector chart uses the bounded stage');
   });
 });

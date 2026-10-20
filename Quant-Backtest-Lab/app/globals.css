@@ -833,3 +833,23 @@
 
 
 
+
+/* -------------------------------------------------------------------------
+   Lazy chart views: the main page stays light; charts mount on demand.
+   ------------------------------------------------------------------------- */
+.charts-single{grid-template-columns:minmax(0,1fr)}
+.chart-stage{position:relative;width:100%;aspect-ratio:16/7;min-height:260px;max-height:460px;display:flex;flex-direction:column;min-width:0}
+.chart-stage>.chart-wrap,.chart-stage>.tick-chart{flex:1;min-height:0;display:flex;flex-direction:column;padding:27px 10px 0}
+.chart-stage>.tick-chart{padding-top:10px}
+.chart-stage>.chart-wrap>svg,.chart-stage>.tick-chart>svg{flex:1;width:100%;height:100%;min-height:0;max-height:none}
+.panel.is-fullscreen>.chart-stage{aspect-ratio:auto;max-height:none;height:auto;flex:1}
+.chart-load{display:flex;flex-direction:column}
+.chart-load-body{display:flex;flex-direction:column;align-items:flex-start;gap:12px;padding:28px 18px 32px;max-width:680px}
+.chart-load-body p{font-size:12px;color:var(--muted-foreground);line-height:1.7}
+.chart-load-body button{padding:9px 16px}
+.chart-load.compact{flex:1;min-height:0;align-items:center;justify-content:center;gap:10px;padding:24px 16px;text-align:center}
+.chart-load.compact p{max-width:430px;font-size:11px;line-height:1.7}
+.chart-jump{width:88px!important;height:28px;padding:4px 7px;font-size:11px;font-family:ui-monospace,Consolas,monospace}
+.chart-overlay-select{height:28px;padding:4px 8px;font-size:11px;background:var(--surface-elevated);border:1px solid var(--border);border-radius:5px;color:var(--foreground)}
+.chart-center-label{white-space:nowrap;max-width:220px;overflow:hidden;text-overflow:ellipsis}
+@media(max-width:900px){.chart-stage{aspect-ratio:4/3;min-height:280px;max-height:420px}.chart-center-label{display:none}}
