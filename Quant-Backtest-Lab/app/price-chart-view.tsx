@@ -4,6 +4,7 @@ import { Activity, ChevronLeft, ChevronRight } from 'lucide-react';
 import { CandleChart, PriceChartLegend } from './charts';
 import { FullscreenPanel } from './fullscreen-panel';
 import { useCandleWindow } from './run-market';
+import { viewportKey } from './viewport-key';
 import { useRunSource } from './run-context';
 import { candles as demoCandles } from './demo';
 import type { Trade } from './types';
@@ -140,6 +141,7 @@ export function PriceChartView({
           onLoadMore={isArchived ? win.loadMore : undefined}
           hasMoreBefore={win.hasBefore}
           hasMoreAfter={win.hasAfter}
+          viewportKey={viewportKey(isArchived ? runId : null)}
         />
       </div>
       <PriceChartLegend overlay={overlay} />

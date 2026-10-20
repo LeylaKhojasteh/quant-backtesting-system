@@ -138,6 +138,7 @@ export function CandleChart({
   onLoadMore,
   hasMoreBefore,
   hasMoreAfter,
+  viewportKey = '',
 }: {
   /** Real BID candles from the run's market context (never synthesized). */
   candles: Candle[];
@@ -156,13 +157,15 @@ export function CandleChart({
   onLoadMore?: (direction: 'before' | 'after') => void;
   hasMoreBefore?: boolean;
   hasMoreAfter?: boolean;
+  /** Explicit identity of the shown series (run id), owned by the parent. */
+  viewportKey?: string;
 }) {
   // Viewport model: the visible range is (anchorTs, count), where anchorTs is
   // the timestamp of the first visible candle. Anchoring to a timestamp — not
   // to a moving array index — keeps the visible range fixed while the candle
   // buffer grows at either edge.
-  const [view, setView] = useState<{ runKey: string; anchorTs: number; count: number } | null>(null);
-  const [initialView, setInitialView] = useState<{ runKey: string; anchorTs: number; count: number } | null>(null);
+  const [view, setView] = useState<{ key: string; anchorTs: number; count: number } | null>(null);
+  const [initialView, setInitialView] = useState<{ key: string; anchorTs: number; count: number } | null>(null);
   const [userNonce, setUserNonce] = useState(-1);
   const [hover, setHover] = useState<number | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -175,9 +178,10 @@ export function CandleChart({
   /** How close to a loaded edge triggers fetching the adjacent real window. */
   const EDGE_TRIGGER = 40;
 
-  // The run's last candle identifies the loaded series; it does not move when
-  // older windows are prepended by edge loading.
-  const runKey = base.length ? String(base[base.length - 1].t) : '';
+  // The series identity comes from the parent (archived run id / fixture); it
+  // is never inferred from the candles, so two runs that end at the same
+  // timestamp stay distinct.
+  const seriesKey = viewportKey;
   const at = useCallback(
     (i: number) => base[Math.max(0, Math.min(i, Math.max(0, base.length - 1)))],
     [base],
@@ -189,9 +193,9 @@ export function CandleChart({
   // the user interacts (drag/zoom/reset) the view stays under their control.
   useEffect(() => {
     if (!base.length) return;
-    if (!view || view.runKey !== runKey) {
+    if (!view || view.key !== seriesKey) {
       const count = Math.min(INITIAL_CANDLE_WINDOW, base.length);
-      const next = { runKey, anchorTs: at(base.length - count).t, count };
+      const next = { key: seriesKey, anchorTs: at(base.length - count).t, count };
       // The initial viewport is frozen once per loaded run from data that is
       // already present; this is the only state sync the effect performs.
       // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -204,10 +208,10 @@ export function CandleChart({
       const idx = base.findIndex((c) => c.t >= centerTarget.t);
       const centre = idx === -1 ? base.length - 1 : idx;
       const start = Math.max(0, Math.min(centre - Math.floor(count / 2), maxStart(count)));
-      setView({ runKey, anchorTs: at(start).t, count });
+      setView({ key: seriesKey, anchorTs: at(start).t, count });
       setUserNonce(centerTarget.nonce);
     }
-  }, [base, runKey, view, centerTarget, userNonce, at, maxStart]);
+  }, [base, seriesKey, view, centerTarget, userNonce, at, maxStart]);
 
   const count = Math.max(
     MIN_WINDOW,
@@ -254,11 +258,11 @@ export function CandleChart({
         Math.min(maxStart(nextCount), Math.round(absolute - cursorIdx * ratio)),
       );
       setUserNonce(centerTarget?.nonce ?? -1);
-      setView({ runKey, anchorTs: at(nextStart).t, count: nextCount });
+      setView({ key: seriesKey, anchorTs: at(nextStart).t, count: nextCount });
     };
     node.addEventListener('wheel', onWheel, { passive: false });
     return () => node.removeEventListener('wheel', onWheel);
-  }, [count, startIndex, base, data.length, ready, runKey, centerTarget?.nonce, at, maxStart]);
+  }, [count, startIndex, base, data.length, ready, seriesKey, centerTarget?.nonce, at, maxStart]);
 
   // Fetch the adjacent real window when the viewport reaches a loaded edge.
   // The viewport is timestamp-anchored, so prepending candles never shifts it.
@@ -541,7 +545,7 @@ export function CandleChart({
           onClick={() => {
             const nextCount = Math.max(MIN_WINDOW, Math.min(MAX_WINDOW, Math.round(count / 1.25)));
             setUserNonce(centerTarget?.nonce ?? -1);
-            setView({ runKey, anchorTs: at(startIndex).t, count: nextCount });
+            setView({ key: seriesKey, anchorTs: at(startIndex).t, count: nextCount });
           }}
         >
           <Plus size={13} />
@@ -551,7 +555,7 @@ export function CandleChart({
           onClick={() => {
             const nextCount = Math.max(MIN_WINDOW, Math.min(MAX_WINDOW, Math.round(count * 1.25)));
             setUserNonce(centerTarget?.nonce ?? -1);
-            setView({ runKey, anchorTs: at(startIndex).t, count: nextCount });
+            setView({ key: seriesKey, anchorTs: at(startIndex).t, count: nextCount });
           }}
         >
           <Minus size={13} />
@@ -603,7 +607,7 @@ export function CandleChart({
           const from = anchorIdx === -1 ? startIndex : anchorIdx;
           const next = Math.max(0, Math.min(maxStart(count), from - deltaCandles));
           setUserNonce(centerTarget?.nonce ?? -1);
-          setView({ runKey, anchorTs: at(next).t, count });
+          setView({ key: seriesKey, anchorTs: at(next).t, count });
         }}
         onPointerUp={() => {
           setIsDragging(false);

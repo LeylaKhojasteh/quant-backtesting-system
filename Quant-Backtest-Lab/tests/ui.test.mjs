@@ -496,9 +496,22 @@ describe('price chart interaction & windowing (v1.0.3)', () => {
     assert.ok(!charts.includes('autoCount'), 'the count is not recomputed as the buffer grows');
     // Initial viewport frozen once per run, and the range derived from the anchor.
     assert.ok(charts.includes('setInitialView(next)'), 'initial viewport captured once');
-    assert.ok(charts.includes('view.runKey !== runKey'), 'a new run re-initialises the viewport');
+    assert.ok(charts.includes('view.key !== seriesKey'), 'a new series re-initialises the viewport');
     assert.ok(charts.includes('const anchorTs = view?.anchorTs'), 'start index derives from the anchor');
     assert.ok(charts.includes('base.findIndex((c) => c.t >= anchorTs)'), 'anchor resolved by timestamp');
+  });
+
+  test('chart series identity comes from the parent, not from candle data', () => {
+    const charts = file('charts.tsx');
+    assert.ok(charts.includes('viewportKey'), 'chart accepts an explicit series key');
+    assert.ok(!charts.includes('base[base.length - 1].t'), 'no key derived from the last candle');
+    assert.ok(!charts.includes('runKey'), 'the timestamp-derived runKey is gone');
+    const view = file('price-chart-view.tsx');
+    assert.ok(view.includes('viewportKey(isArchived ? runId : null)'),
+      'archived run id is part of the key; fixture mode stays separate');
+    const page = file('page.tsx');
+    assert.ok(page.includes('makeViewportKey(archivedRunId'),
+      'inspector chart is keyed by the archived run id');
   });
 
   test('drag pans from a synchronous ref and survives capture failure', () => {
