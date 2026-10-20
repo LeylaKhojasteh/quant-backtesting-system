@@ -8,7 +8,7 @@ framework — just enough to avoid scattered hard-coded paths.
 import os
 from pathlib import Path
 
-VERSION = "1.0.3"
+VERSION = "1.0.4"
 
 
 def _path(env: str, default: str) -> Path:

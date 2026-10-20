@@ -3,7 +3,7 @@
 Local tick-level backtesting workstation. Import a strategy, run it against
 real BID/ASK market data, inspect every trade, archive the result.
 
-**Version: 1.0.3**
+**Version: 1.0.4**
 
 ---
 
@@ -32,7 +32,7 @@ Double-click **`START_QUANT_LAB.bat`**, or:
 
 - App: **http://127.0.0.1:5173/**
 - Engine (API only, no page): **http://127.0.0.1:8765**
-- Topbar must say `Python Bridge: Connected · v1.0.3`.
+- Topbar must say `Python Bridge: Connected · v1.0.4`.
 
 ## 4. Put your data in `data/`
 
