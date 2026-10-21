@@ -1,8 +1,14 @@
 # Virtual environment (machine specific)
 .venv/
 
-# Large read-only source tick data
-data/
+# Large read-only source tick data.
+# The bundled sample dataset under data/sample/ is committed on purpose so a
+# newcomer can run a real backtest without supplying their own market data.
+# It is a small, real Dukascopy session of XAUUSD ticks.
+data/*
+!data/sample/
+data/sample/*
+!data/sample/*.csv
 
 # Archives
 *.zip
