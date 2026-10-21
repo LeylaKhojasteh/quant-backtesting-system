@@ -251,7 +251,8 @@ python scripts/install_sample_data.py --remove
 ## Docs
 
 `ARCHITECTURE.md` (source of truth) · `docs/DATA_ENGINE.md` ·
-`docs/EXECUTION_MODEL.md` · `docs/STRATEGY_GUIDE.md` ·
+`docs/EXECUTION_MODEL.md` · `docs/EXECUTION_PARITY.md` (the pinned execution contract) ·
+`docs/STRATEGY_GUIDE.md` ·
 `docs/RUN_ARCHIVE.md` · `docs/TEST_HARNESS.md` · `docs/RELEASE_v1.md`
 
 ---
