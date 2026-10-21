@@ -1,0 +1,62 @@
+{
+  "stop_distance": 0.5,
+  "take_profit_distance": 1.0,
+  "signals": {
+    "received": 4,
+    "executed": 3,
+    "ignored": 1
+  },
+  "trades": [
+    {
+      "trade_id": 1,
+      "direction": "LONG",
+      "signal_candle_start": "2025-01-06T00:00:00Z",
+      "signal_available_time": "2025-01-06T00:00:05Z",
+      "entry_time": "2025-01-06T00:00:10Z",
+      "entry_price": 100.3,
+      "stop_loss": 99.8,
+      "take_profit": 101.3,
+      "exit_time": "2025-01-06T00:01:20Z",
+      "exit_price": 99.8,
+      "exit_reason": "SL",
+      "pnl_price": -0.5,
+      "duration_seconds": 70,
+      "spread_at_entry": 0.2,
+      "spread_at_exit": 0.2
+    },
+    {
+      "trade_id": 2,
+      "direction": "SHORT",
+      "signal_candle_start": "2025-01-06T00:01:20Z",
+      "signal_available_time": "2025-01-06T00:01:25Z",
+      "entry_time": "2025-01-06T00:01:30Z",
+      "entry_price": 100.5,
+      "stop_loss": 101.0,
+      "take_profit": 99.5,
+      "exit_time": "2025-01-06T00:02:00Z",
+      "exit_price": 99.5,
+      "exit_reason": "TP",
+      "pnl_price": 1.0,
+      "duration_seconds": 30,
+      "spread_at_entry": 0.2,
+      "spread_at_exit": 0.2
+    },
+    {
+      "trade_id": 3,
+      "direction": "LONG",
+      "signal_candle_start": "2025-01-06T00:02:00Z",
+      "signal_available_time": "2025-01-06T00:02:05Z",
+      "entry_time": "2025-01-06T00:02:10Z",
+      "entry_price": 99.9,
+      "stop_loss": 99.4,
+      "take_profit": 100.9,
+      "exit_time": "2025-01-06T00:02:20Z",
+      "exit_price": 99.6,
+      "exit_reason": "END_OF_DATA",
+      "pnl_price": -0.3,
+      "duration_seconds": 10,
+      "spread_at_entry": 0.2,
+      "spread_at_exit": 0.2
+    }
+  ]
+}
