@@ -78,10 +78,10 @@ What you get, verified on this exact sample:
 
 | | |
 |---|---|
-| Ticks | **149,220** real BID/ASK ticks |
-| Candles | 88 (M15) |
-| Trades | **26** with Stop 3 / Take 6 |
-| Cache parity | `rows 149220/149220 value=True order=True` |
+| Ticks | **193,121** real BID/ASK ticks (gold, 2632–2657) |
+| Candles | 64 (M15) |
+| Trades | **31** with Stop 2 / Take 4 |
+| Cache parity | `rows 193121/193121 value=True order=True` |
 
 > The sample registers as its own logical dataset (`xauusd_sample_ticks`), so it can
 > never collide with the real monthly files in your own `data/` folder.
@@ -95,9 +95,16 @@ python scripts/fetch_dukascopy_ticks.py XAUUSD 2024 12 04 --out data
 python scripts/fetch_dukascopy_ticks.py EURUSD 2025 01 06 --hours 8-16 --out data
 ```
 
-It handles Dukascopy's rate limiting, the per-instrument price scaling (FX uses
-5 decimals, metals and JPY crosses use 3) and the hourly timestamp offset — the three
-places where a hand-rolled converter usually produces silently wrong prices.
+It handles the four things that silently produce wrong data when done by hand:
+
+- **rate limiting** — Dukascopy answers `503` under load, so every hour is retried
+- **price scaling** — FX uses 5 decimals, metals and JPY crosses use 3
+- **the hourly timestamp offset** — `ms` is offset *within* the hour, not absolute
+- **the zero-based month index** — `00` is January, `11` is December
+
+The last one is the nasty one: request December against the wrong index and you get
+January, with entirely plausible prices. The tool therefore cross-checks the fetched
+price against a known-good range for that month and refuses to write a mismatched file.
 
 ---
 

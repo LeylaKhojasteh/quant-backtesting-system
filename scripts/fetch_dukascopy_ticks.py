@@ -40,7 +40,11 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-URL = ("https://datafeed.dukascopy.com/datafeed/{symbol}/{year:04d}/00/{day:02d}/{hour:02d}h_ticks.bi5")
+#: Dukascopy's path uses a **zero-based** month index: ``00`` is January,
+#: ``01`` is February, ..., ``11`` is December. Getting this wrong silently
+#: returns a different month of data (a December request against the ``00``
+#: path returns January) with plausible-looking prices.
+URL = ("https://datafeed.dukascopy.com/datafeed/{symbol}/{year:04d}/{month:02d}/{day:02d}/{hour:02d}h_ticks.bi5")
 USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
@@ -64,6 +68,19 @@ PRICE_BANDS = {
     "EURUSD": (0.9, 1.4), "GBPUSD": (1.0, 1.6), "USDJPY": (100.0, 200.0),
 }
 
+#: Known-good price checkpoints used to catch a wrong *month* fetch. Dukascopy's
+#: month index is zero-based, so requesting December against the wrong index
+#: silently returns January — the data still parses, the prices still look
+#: plausible, and only a dated checkpoint notices. Each entry is
+#: ``(month, (low, high))`` for the expected bid range in that month.
+PRICE_CHECKPOINTS: dict[str, dict[int, tuple[float, float]]] = {
+    # XAUUSD spot history: ~2060 in Jan 2024, ~2650 in Dec 2024, ~2640 in Jan 2025.
+    "XAUUSD": {
+        1: (1900.0, 2200.0),    # January
+        12: (2500.0, 2800.0),   # December
+    },
+}
+
 
 def _valid_bi5(path: Path) -> bool:
     """A usable .bi5 is LZMA-compressed and decodes to a multiple of 20 bytes."""
@@ -74,12 +91,12 @@ def _valid_bi5(path: Path) -> bool:
     return bool(raw) and len(raw) % 20 == 0
 
 
-def download_hour(symbol: str, year: int, day: int, hour: int,
+def download_hour(symbol: str, year: int, month: int, day: int, hour: int,
                   out_dir: Path, attempts: int = 12) -> Path | None:
-    target = out_dir / f"{year:04d}_{day:02d}_{hour:02d}h.bi5"
+    target = out_dir / f"{year:04d}_{month:02d}_{day:02d}_{hour:02d}h.bi5"
     if target.is_file() and _valid_bi5(target):
         return target
-    url = URL.format(symbol=symbol, year=year, day=day, hour=hour)
+    url = URL.format(symbol=symbol, year=year, month=month - 1, day=day, hour=hour)
     delay = 2.0
     for attempt in range(1, attempts + 1):
         tmp = out_dir / f".tmp_{hour:02d}h_{attempt}.bi5"
@@ -176,7 +193,7 @@ def main() -> int:
         else:
             hours = [int(h) for h in args.hours.split(",") if h.strip()]
         for hour in hours:
-            path = download_hour(symbol, year, day, hour, source)
+            path = download_hour(symbol, year, month, day, hour, source)
             if path is None:
                 print(f"  [{hour:02d}h] gave up after retries", flush=True)
             else:
@@ -187,11 +204,14 @@ def main() -> int:
         print(f"no .bi5 files found in {source}")
         return 1
 
-    stamp = f"{year:04d}.{month:02d}.{day:02d}"
     lines: list[str] = []
     hours_seen: list[int] = []
     for path in files:
-        hour = int(path.stem.split("_")[-1].rstrip("h"))
+        # The file name carries its own date, so a mixed folder can never be
+        # relabeled with the requested date.
+        parts = path.stem.split("_")
+        file_day = f"{parts[0]}.{parts[1]}.{parts[2]}"
+        hour = int(parts[-1].rstrip("h"))
         try:
             rows = decode_hour(path, point, hour)
         except lzma.LZMAError:
@@ -200,7 +220,7 @@ def main() -> int:
         if not rows:
             continue
         hours_seen.append(hour)
-        lines.extend(f"{stamp},{row}" for row in rows)
+        lines.extend(f"{file_day},{row}" for row in rows)
 
     if not lines:
         print("no decodable ticks")
@@ -212,6 +232,18 @@ def main() -> int:
         raise SystemExit(
             f"price sanity check failed for {symbol}: bid {first_bid} outside "
             f"expected band {band}. Wrong point factor (used {point:g})?")
+
+    # Dated checkpoint: catches a wrong-month fetch (Dukascopy's month index
+    # is zero-based, so the wrong index returns a different month of data
+    # whose prices still look perfectly plausible).
+    checkpoints = PRICE_CHECKPOINTS.get(symbol, {})
+    checkpoint = checkpoints.get(month)
+    if checkpoint and not (checkpoint[0] <= first_bid <= checkpoint[1]):
+        raise SystemExit(
+            f"date/price mismatch for {symbol}: {year}-{month:02d}-{day:02d} "
+            f"should trade near {checkpoint[0]}-{checkpoint[1]} but the first bid "
+            f"is {first_bid}. The downloaded month is probably wrong "
+            f"(Dukascopy's month index is zero-based: 00=January ... 11=December).")
 
     out_file = out_dir / f"{symbol}_{args.provider}_{year:04d}_{month:02d}_ticks.csv"
     out_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
