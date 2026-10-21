@@ -611,6 +611,10 @@ def _read_partition_meta(root: str | Path, pid: PartitionId) -> dict:
 SOURCE_COMPLETENESS: dict[str, str] = {
     **{f"XAUUSD_DUKAS_2025_{m:02d}_ticks.csv": "complete" for m in range(1, 13)},
     "XAUUSD_DUKAS_2026_01_ticks.csv": "partial",
+    # The bundled newcomer sample is one real trading session, not a month:
+    # it must be declared partial so the UI defaults to its actual coverage
+    # instead of a whole-year range that contains no data.
+    "XAUUSD_SAMPLE_2024_12_ticks.csv": "partial",
 }
 
 
