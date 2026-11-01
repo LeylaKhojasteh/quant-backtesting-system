@@ -4,6 +4,7 @@ import { AlertTriangle, Loader2, Play, RefreshCw, Upload, Settings2 } from 'luci
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { useBridge } from './bridge-status';
+import { DateField } from './date-field';
 import { useRunSource } from './run-context';
 import { useRunJob } from './run-job-context';
 import { useWorkspace } from './workspace-context';
@@ -57,7 +58,7 @@ export function RealRunPanel() {
   const [strategyId, setStrategyId] = useState('');
   const [params, setParams] = useState<Record<string, ParamValue>>({});
   const [datasetId, setDatasetId] = useState('');
-  const [symbol, setSymbol] = useState('XAUUSD');
+  const [symbol, setSymbol] = useState('');
   const [timeframe, setTimeframe] = useState('15min');
   const [timeframes, setTimeframes] = useState<TimeframeOption[]>([]);
   const [start, setStart] = useState('');
@@ -67,6 +68,11 @@ export function RealRunPanel() {
   // effective default backtest behavior is unchanged.
   const [stop, setStop] = useState('');
   const [take, setTake] = useState('');
+  // Price-distance fallback for symbols without pip metadata (e.g. crypto).
+  const [stopPrice, setStopPrice] = useState('');
+  const [takePrice, setTakePrice] = useState('');
+  // SL/TP are optional: when unchecked the run is sent without any exit level.
+  const [riskEnabled, setRiskEnabled] = useState(true);
 
   // Optional account / trading-economics model. Disabled by default: a run
   // without it behaves exactly as before (price-term only).
@@ -85,12 +91,20 @@ export function RealRunPanel() {
   const [runError, setRunError] = useState<string | null>(null);
   const [reuseWarning, setReuseWarning] = useState<string | null>(null);
   // Synchronous guard so two clicks in the same tick cannot start two runs
-  // (provider state updates are async). Cleared on terminal outcome.
+  // (provider state updates are async). Stays locked while the job is active
+  // and is released when the job settles so the next run can start without
+  // a page refresh.
   const inFlight = useRef(false);
   // The activity bar owns the running state; the form only mirrors it.
   // Terminal outcome text is derived during render (no cascading effect):
   // completion is announced by the page shell after auto-loading.
   const running = jobActive;
+  useEffect(() => {
+    if (!jobActive) inFlight.current = false;
+  }, [jobActive]);
+  useEffect(() => {
+    if (outcome) inFlight.current = false;
+  }, [outcome]);
   const shownError = runError ?? (outcome?.kind === 'failed' ? `run failed: ${outcome.message}` : null);
   const shownNotice = notice ?? (outcome?.kind === 'stopped' ? 'Backtest stopped · run discarded' : null);
   // Keep the current selection so a catalog reload (e.g. after a strategy
@@ -205,6 +219,12 @@ export function RealRunPanel() {
       } else if (detail.execution?.take_profit_distance != null && detailPip) {
         setTake(String(+(Number(detail.execution.take_profit_distance) / detailPip).toFixed(10)));
       }
+      if (detail.execution?.stop_distance != null) {
+        setStopPrice(String(detail.execution.stop_distance));
+      }
+      if (detail.execution?.take_profit_distance != null) {
+        setTakePrice(String(detail.execution.take_profit_distance));
+      }
       if (detail.account) {
         setAccountEnabled(true);
         if (detail.account.account_currency) setAccountCurrency(detail.account.account_currency);
@@ -312,6 +332,8 @@ export function RealRunPanel() {
   const defaultTakePips = pipSize ? String(+(10 / pipSize).toFixed(10)) : '';
   const stopPipsValue = stop !== '' ? stop : defaultStopPips;
   const takePipsValue = take !== '' ? take : defaultTakePips;
+  const stopPriceValue = stopPrice !== '' ? stopPrice : '5';
+  const takePriceValue = takePrice !== '' ? takePrice : '10';
   const effectiveDistance = (pips: string) => {
     const n = Number(pips);
     return pipSize && Number.isFinite(n) ? n * pipSize : null;
@@ -324,13 +346,14 @@ export function RealRunPanel() {
     if (timeframes.length > 0 && !timeframes.some((t) => t.value === timeframe)) {
       return 'Unsupported timeframe. Select one of the available timeframes.';
     }
-    if (!pipSize) {
-      return `No pip size configured for ${symbol || 'this symbol'} — SL/TP in pips need instrument metadata.`;
+    const isExternal = strategy.kind === 'external' || strategy.execution_model === 'strategy';
+    if (riskEnabled && !isExternal) {
+      const stopN = Number(pipSize ? stopPipsValue : stopPriceValue);
+      const takeN = Number(pipSize ? takePipsValue : takePriceValue);
+      const unit = pipSize ? 'pips' : 'price units';
+      if (!Number.isFinite(stopN) || stopN <= 0) return `Stop Loss (${unit}) must be a positive number`;
+      if (!Number.isFinite(takeN) || takeN <= 0) return `Take Profit (${unit}) must be a positive number`;
     }
-    const stopN = Number(stopPipsValue);
-    const takeN = Number(takePipsValue);
-    if (!Number.isFinite(stopN) || stopN <= 0) return 'Stop Loss (pips) must be a positive number';
-    if (!Number.isFinite(takeN) || takeN <= 0) return 'Take Profit (pips) must be a positive number';
     if (!start || !end) return 'Start and end dates are required';
     if (start > end) return 'Start date must be on or before the end date';
     if (accountEnabled) {
@@ -397,10 +420,17 @@ export function RealRunPanel() {
           start,
           end,
         },
-        execution: {
-          stop_loss_pips: Number(stopPipsValue),
-          take_profit_pips: Number(takePipsValue),
-        },
+        execution: !riskEnabled || strategy.kind === 'external' || strategy.execution_model === 'strategy'
+          ? {}
+          : pipSize
+            ? {
+                stop_loss_pips: Number(stopPipsValue),
+                take_profit_pips: Number(takePipsValue),
+              }
+            : {
+                stop_distance: Number(stopPriceValue),
+                take_profit_distance: Number(takePriceValue),
+              },
         ...(accountEnabled
           ? {
               account: {
@@ -416,6 +446,13 @@ export function RealRunPanel() {
                     contract_size: instrumentSpec.contract_size,
                     ...(instrumentSpec.tick_size != null ? { tick_size: instrumentSpec.tick_size } : {}),
                     ...(instrumentSpec.pip_size != null ? { pip_size: instrumentSpec.pip_size } : {}),
+                    ...(instrumentSpec.asset_class ? { asset_class: instrumentSpec.asset_class } : {}),
+                    ...(instrumentSpec.digits != null ? { digits: instrumentSpec.digits } : {}),
+                    ...(instrumentSpec.price_scale != null ? { price_scale: instrumentSpec.price_scale } : {}),
+                    ...(instrumentSpec.session ? { session: instrumentSpec.session } : {}),
+                    ...(instrumentSpec.leverage != null ? { leverage: instrumentSpec.leverage } : {}),
+                    ...(instrumentSpec.margin_rate != null ? { margin_rate: instrumentSpec.margin_rate } : {}),
+                    ...(instrumentSpec.swap != null ? { swap: instrumentSpec.swap } : {}),
                   }
                 : undefined,
             }
@@ -425,9 +462,9 @@ export function RealRunPanel() {
       setNotice('Backtest started — tracking live progress above.');
       // Refresh the library in the background so the new run appears there
       // on completion even if the manifest lags by a poll tick.
-      refreshArchived();
+      refreshArchived().catch(() => {});
     } catch (err) {
-      // Never fall back to Demo on a real-run failure.
+      // Never fall back to placeholder data on a real-run failure.
       inFlight.current = false;
       if (err instanceof BridgeError) {
         setRunError(err.code === 'run_in_progress'
@@ -441,10 +478,12 @@ export function RealRunPanel() {
     <div className="config-section real-run">
       {!connected && (
         <p className="rr-status rr-offline" role="status">
-          {bridge.status === 'checking'
+          {bridge.status === 'checking' || bridge.status === 'connecting'
             ? 'Contacting Python Bridge…'
-            : 'Python Bridge Offline — start the bridge to run a real backtest.'}
-          {bridge.status === 'unavailable' && (
+            : bridge.reason === 'network'
+              ? 'Network disconnected — check your network.'
+              : 'Python Bridge Offline — start the bridge to run a real backtest.'}
+          {bridge.status === 'disconnected' && (
             <button type="button" className="rr-retry" onClick={refresh}>
               <RefreshCw size={12} /> Retry
             </button>
@@ -477,7 +516,6 @@ export function RealRunPanel() {
             </SelectContent>
           </Select>
         </label>
-        {strategy?.description && <p className="strategy-desc">{strategy.description}</p>}
 
         <div className="rr-import">
           <button
@@ -550,17 +588,10 @@ export function RealRunPanel() {
         </label>
         <label>
           Date Range <span className="meta">UTC</span>
-          <input type="date" value={start} onChange={(e) => setStart(e.target.value)} aria-label="Run start date" />
+          <DateField value={start} onChange={setStart} label="Run start date" />
           <span className="date-to">to</span>
-          <input type="date" value={end} onChange={(e) => setEnd(e.target.value)} aria-label="Run end date" />
+          <DateField value={end} onChange={setEnd} label="Run end date" />
         </label>
-        {dataset && (
-          <p className="rr-help" aria-label="Dataset status">
-            Coverage {String(dataset.coverage_start).slice(0, 10)} → {String(dataset.coverage_end).slice(0, 10)} ·{' '}
-            {dataset.prepared_timeframes.includes(timeframe) ? 'Data Ready' : `Preparation required for ${timeframe}`}
-            {dataset.partial_months.length ? ` · partial: ${dataset.partial_months.join(', ')}` : ''}
-          </p>
-        )}
       </fieldset>
 
       {reuseWarning && (
@@ -591,7 +622,6 @@ export function RealRunPanel() {
         {running ? <Loader2 size={15} className="spin" /> : <Play size={15} fill="currentColor" />}
         {running ? 'Backtest running…' : 'Run Backtest'}
       </button>
-      <p className="config-note">Archives + report + publishes to the dashboard</p>
 
             <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
         <DialogContent className="settings-dialog">
@@ -634,14 +664,46 @@ export function RealRunPanel() {
           )}
 
           <div className="rr-group-label">Trade / Execution</div>
+          {strategy?.kind === 'external' || strategy?.execution_model === 'strategy' ? (
+            <p className="rr-help">
+              Strategy-owned execution: this strategy produces its own trades and
+              manages its own exits. Engine SL / TP do not apply.
+            </p>
+          ) : (
+          <>
           <p className="rr-help">Stop / take levels are engine execution inputs, not strategy parameters.</p>
-          <label title="Converted to price distance using the selected instrument's pip size.">
-            Stop Loss (pips)
-            <input type="number" step="any" min="0" value={stopPipsValue} onChange={(e) => setStop(e.target.value)} aria-label="Stop loss pips" />
+          <label className="rr-check">
+            <input
+              type="checkbox"
+              aria-label="Use stop loss and take profit"
+              checked={riskEnabled}
+              onChange={(e) => setRiskEnabled(e.target.checked)}
+            />
+            Use SL / TP
           </label>
-          <label title="Converted to price distance using the selected instrument's pip size.">
-            Take Profit (pips)
-            <input type="number" step="any" min="0" value={takePipsValue} onChange={(e) => setTake(e.target.value)} aria-label="Take profit pips" />
+          <label title={pipSize ? "Converted to price distance using the selected instrument's pip size." : 'Applied directly in instrument price units.'}>
+            {pipSize ? 'Stop Loss (pips)' : 'Stop Loss (price units)'}
+            <input
+              type="number"
+              step="any"
+              min="0"
+              disabled={!riskEnabled}
+              value={pipSize ? stopPipsValue : stopPriceValue}
+              onChange={(e) => (pipSize ? setStop(e.target.value) : setStopPrice(e.target.value))}
+              aria-label={pipSize ? 'Stop loss pips' : 'Stop loss price distance'}
+            />
+          </label>
+          <label title={pipSize ? "Converted to price distance using the selected instrument's pip size." : 'Applied directly in instrument price units.'}>
+            {pipSize ? 'Take Profit (pips)' : 'Take Profit (price units)'}
+            <input
+              type="number"
+              step="any"
+              min="0"
+              disabled={!riskEnabled}
+              value={pipSize ? takePipsValue : takePriceValue}
+              onChange={(e) => (pipSize ? setTake(e.target.value) : setTakePrice(e.target.value))}
+              aria-label={pipSize ? 'Take profit pips' : 'Take profit price distance'}
+            />
           </label>
           {pipSize ? (
             <p className="rr-help">
@@ -649,7 +711,11 @@ export function RealRunPanel() {
               {' '}(1 pip = {pipSize} · {symbol.trim().toUpperCase()})
             </p>
           ) : (
-            <p className="rr-warn" role="status">No pip size configured for {symbol || 'this symbol'} — SL/TP in pips need instrument metadata.</p>
+            <p className="rr-help">
+              SL/TP use price units for {symbol.trim().toUpperCase() || 'this symbol'}.
+            </p>
+          )}
+          </>
           )}
 
           <div className="rr-group-label">Position sizing &amp; account <span className="meta">· optional</span></div>

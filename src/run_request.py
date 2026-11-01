@@ -14,7 +14,9 @@ This module is plain data plus small pure helpers (no pandas, no engine).
 
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 
 from src.accounting import AccountModel, InstrumentSpec, resolve_instrument
 from src.execution import resolve_distances
@@ -78,12 +80,15 @@ class ExecutionRequest:
     ``stop_distance`` / ``take_profit_distance`` are the **price distances** the
     engine consumes. ``stop_loss_pips`` / ``take_profit_pips`` are the user's
     intent (v1.0.3); when present they are converted once via the instrument's
-    ``pip_size`` and the effective price distances are stored above. Legacy
-    callers that only set ``stop_distance`` behave exactly as before.
+    ``pip_size`` and the effective price distances are stored above.
+
+    Both price distances are optional: ``None`` means "no stop" / "no target"
+    and the engine then only closes the position at the end of the data.
     """
 
-    stop_distance: float = 5.0
-    take_profit_distance: float = 10.0
+    #: Optional price distances. ``None`` disables that exit entirely.
+    stop_distance: float | None = None
+    take_profit_distance: float | None = None
     stop_loss_pips: float | None = None
     take_profit_pips: float | None = None
     #: Pip size used for the conversion (None for legacy price-unit runs).
@@ -225,6 +230,13 @@ def _positive_number(name: str, value):
     return number
 
 
+def _optional_positive_number(name: str, value):
+    """Validate an optional execution distance; ``None`` disables the exit."""
+    if value is None:
+        return None
+    return _positive_number(name, value)
+
+
 def _account_amount(name: str, value, *, allow_zero: bool) -> float:
     """Validate an account/instrument number (never bool) with explicit bounds."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -234,6 +246,15 @@ def _account_amount(name: str, value, *, allow_zero: bool) -> float:
         raise InvalidParametersError(
             f"{name} must be {'>= 0' if allow_zero else '> 0'}, got {value!r}"
         )
+    return number
+
+
+def _signed_number(name: str, value) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise InvalidParametersError(f"{name} must be a number, got {value!r}")
+    number = float(value)
+    if not math.isfinite(number):
+        raise InvalidParametersError(f"{name} must be finite, got {value!r}")
     return number
 
 
@@ -270,7 +291,12 @@ def parse_instrument(raw) -> InstrumentSpec | None:
         return None
     if not isinstance(raw, dict):
         raise InvalidParametersError("instrument must be an object")
-    unknown = sorted(set(raw) - {"symbol", "quote_currency", "contract_size", "tick_size", "pip_size"})
+    allowed = {
+        "symbol", "quote_currency", "contract_size", "tick_size", "pip_size",
+        "asset_class", "digits", "price_scale", "session", "leverage",
+        "margin_rate", "swap",
+    }
+    unknown = sorted(set(raw) - allowed)
     if unknown:
         raise InvalidParametersError(f"unknown instrument field(s): {unknown}")
     symbol = raw.get("symbol")
@@ -281,12 +307,26 @@ def parse_instrument(raw) -> InstrumentSpec | None:
         raise InvalidParametersError("instrument.quote_currency is required")
     tick = raw.get("tick_size")
     pip = raw.get("pip_size")
+    scale = raw.get("price_scale")
+    leverage = raw.get("leverage")
+    margin = raw.get("margin_rate")
+    swap = raw.get("swap")
+    digits = raw.get("digits")
+    if digits is not None and (isinstance(digits, bool) or not isinstance(digits, int) or digits < 0):
+        raise InvalidParametersError("instrument.digits must be a non-negative integer")
     return InstrumentSpec(
-        symbol=symbol.strip(),
-        quote_currency=quote.strip(),
+        symbol=symbol.strip().upper(),
+        quote_currency=quote.strip().upper(),
         contract_size=_account_amount("instrument.contract_size", raw.get("contract_size"), allow_zero=False),
         tick_size=None if tick is None else _account_amount("instrument.tick_size", tick, allow_zero=False),
         pip_size=None if pip is None else _account_amount("instrument.pip_size", pip, allow_zero=False),
+        asset_class=str(raw.get("asset_class") or "unknown"),
+        digits=digits,
+        price_scale=None if scale is None else _account_amount("instrument.price_scale", scale, allow_zero=False),
+        session=str(raw["session"]) if raw.get("session") else None,
+        leverage=None if leverage is None else _account_amount("instrument.leverage", leverage, allow_zero=False),
+        margin_rate=None if margin is None else _account_amount("instrument.margin_rate", margin, allow_zero=True),
+        swap=None if swap is None else _signed_number("instrument.swap", swap),
     )
 
 
@@ -369,9 +409,11 @@ def parse_request_payload(payload) -> BacktestRunRequest:
             )
         stop_loss_pips = _positive_number("execution.stop_loss_pips", raw_execution.get("stop_loss_pips"))
         take_profit_pips = _positive_number("execution.take_profit_pips", raw_execution.get("take_profit_pips"))
-    stop_distance = _positive_number("execution.stop_distance", raw_execution.get("stop_distance", 5.0))
-    take_profit = _positive_number(
-        "execution.take_profit_distance", raw_execution.get("take_profit_distance", 10.0)
+    stop_distance = _optional_positive_number(
+        "execution.stop_distance", raw_execution.get("stop_distance")
+    )
+    take_profit = _optional_positive_number(
+        "execution.take_profit_distance", raw_execution.get("take_profit_distance")
     )
 
     publish = payload.get("publish", False)
@@ -415,6 +457,25 @@ def parse_request_payload(payload) -> BacktestRunRequest:
     )
 
 
+def validate_bridge_data_source(market: MarketRequest, data_dir: str | Path) -> None:
+    """Bridge-only allowlist: cache datasets or files inside the data directory.
+
+    CLI/in-process callers keep their existing raw-path behavior; the local HTTP
+    bridge must not be able to read arbitrary filesystem paths.
+    """
+    source = market.data_source.strip()
+    if source.startswith("cache:"):
+        return
+    root = Path(data_dir).expanduser().resolve()
+    path = Path(source).expanduser().resolve()
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise InvalidDatasetError(
+            "bridge accepts cache: datasets or files under the configured data directory"
+        ) from exc
+
+
 def build_run_config(
     request: BacktestRunRequest,
     *,
@@ -432,10 +493,10 @@ def build_run_config(
     reader exactly how the run was produced. Values are the effective ones
     actually used (no fake or unavailable values are stored).
 
-    ``account`` and ``instrument`` are included only when an account model was
-    requested; ``instrument`` is the effective spec actually used (explicit or
-    resolved from the catalog). Runs without an account model archive exactly
-    the same config as before.
+    ``account`` is included only when an account model was requested.
+    ``instrument`` is the effective metadata actually used (explicit or resolved
+    from the data-driven registry) and is archived whenever it is known, so
+    price-term runs also carry quote/contract/tick/pip/digits metadata.
     """
     config = {
         "run_id": run_id,

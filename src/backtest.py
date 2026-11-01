@@ -5,13 +5,17 @@ REQUIRED_SIGNAL_COLUMNS = ["signal_candle_start", "signal_available_time", "dire
 VALID_DIRECTIONS = ("LONG", "SHORT")
 
 
-def run_backtest(ticks, signals, stop_distance, take_profit_distance):
+def run_backtest(ticks, signals, stop_distance=None, take_profit_distance=None):
     """Execute normalized signals tick-by-tick on real BID/ASK ticks.
 
     The engine only knows signals; it never sees candles and never generates
     signals itself. Per tick: first evaluate an open position for SL/TP, then
     process signals whose availability time has been reached. Signals arriving
     while a position is open are ignored and are not queued.
+
+    ``stop_distance`` and ``take_profit_distance`` are optional price
+    distances. ``None`` disables that exit entirely: with both disabled a
+    position stays open until the end of the selected data (``END_OF_DATA``).
     """
     missing = [c for c in REQUIRED_SIGNAL_COLUMNS if c not in signals.columns]
     if missing:
@@ -20,12 +24,24 @@ def run_backtest(ticks, signals, stop_distance, take_profit_distance):
     if invalid:
         raise ValueError(f"signals contains invalid directions: {invalid}")
 
-    t = ticks.sort_values("timestamp", kind="stable").reset_index(drop=True)
+    # The runner marks Data-Engine frames with attrs["qbl_sorted"]; such
+    # frames skip the defensive re-sort (identical output — the loader
+    # guarantees chronological order). Raw-CSV frames keep the sort.
+    if ticks.attrs.get("qbl_sorted") == "timestamp" and ticks["timestamp"].is_monotonic_increasing:
+        t = ticks.reset_index(drop=True) if not ticks.index.equals(
+            pd.RangeIndex(len(ticks))) else ticks
+    else:
+        t = ticks.sort_values("timestamp", kind="stable").reset_index(drop=True)
     timestamps = t["timestamp"].tolist()
     bid = t["bid"].to_numpy(dtype="float64")
     ask = t["ask"].to_numpy(dtype="float64")
 
-    s = signals.sort_values("signal_available_time", kind="stable").reset_index(drop=True)
+    if (signals.attrs.get("qbl_sorted") == "signal_available_time"
+            and signals["signal_available_time"].is_monotonic_increasing):
+        s = signals.reset_index(drop=True) if not signals.index.equals(
+            pd.RangeIndex(len(signals))) else signals
+    else:
+        s = signals.sort_values("signal_available_time", kind="stable").reset_index(drop=True)
     s_time = s["signal_available_time"].tolist()
     s_dir = s["direction"].tolist()
     s_start = s["signal_candle_start"].tolist()
@@ -63,24 +79,44 @@ def run_backtest(ticks, signals, stop_distance, take_profit_distance):
                 "duration_seconds": (timestamps[i] - d["entry_time"]).total_seconds(),
                 "spread_at_entry": d["entry_ask"] - d["entry_bid"],
                 "spread_at_exit": ask[i] - bid[i],
+                "mae": d["mae"],
+                "mfe": d["mfe"],
             }
         )
         position = None
 
+    def track_excursion(i):
+        """Update MAE (signed, <= 0) / MFE (>= 0) on the exit-side price.
+
+        LONG exits on BID and SHORT exits on ASK, so excursions use the same
+        side as the real PnL; the entry spread is an immediate adverse move.
+        """
+        d = position
+        if d["direction"] == "LONG":
+            move = bid[i] - d["entry_price"]
+        else:
+            move = d["entry_price"] - ask[i]
+        d["mae"] = min(d["mae"], move)
+        d["mfe"] = max(d["mfe"], move)
+
     for i in range(len(t)):
         ti = timestamps[i]
 
-        # 1) evaluate exit on this tick first
+        # 1) update the open position's excursions, then evaluate its exit.
+        # The exit tick is included so gap fills are reflected in MAE/MFE.
         if position is not None:
+            track_excursion(i)
+            stop_loss = position["stop_loss"]
+            take_profit = position["take_profit"]
             if position["direction"] == "LONG":
-                if bid[i] <= position["stop_loss"]:
+                if stop_loss is not None and bid[i] <= stop_loss:
                     close_position(i, bid[i], "SL")
-                elif bid[i] >= position["take_profit"]:
+                elif take_profit is not None and bid[i] >= take_profit:
                     close_position(i, bid[i], "TP")
             else:
-                if ask[i] >= position["stop_loss"]:
+                if stop_loss is not None and ask[i] >= stop_loss:
                     close_position(i, ask[i], "SL")
-                elif ask[i] <= position["take_profit"]:
+                elif take_profit is not None and ask[i] <= take_profit:
                     close_position(i, ask[i], "TP")
 
         # 2) then consume signals that are due at this tick
@@ -89,12 +125,24 @@ def run_backtest(ticks, signals, stop_distance, take_profit_distance):
                 direction = s_dir[next_signal]
                 if direction == "LONG":
                     entry_price = ask[i]
-                    stop_loss = entry_price - stop_distance
-                    take_profit = entry_price + take_profit_distance
+                    stop_loss = (
+                        None if stop_distance is None else entry_price - stop_distance
+                    )
+                    take_profit = (
+                        None if take_profit_distance is None
+                        else entry_price + take_profit_distance
+                    )
+                    entry_move = bid[i] - entry_price
                 else:
                     entry_price = bid[i]
-                    stop_loss = entry_price + stop_distance
-                    take_profit = entry_price - take_profit_distance
+                    stop_loss = (
+                        None if stop_distance is None else entry_price + stop_distance
+                    )
+                    take_profit = (
+                        None if take_profit_distance is None
+                        else entry_price - take_profit_distance
+                    )
+                    entry_move = entry_price - ask[i]
                 position = {
                     "direction": direction,
                     "signal_candle_start": s_start[next_signal],
@@ -105,6 +153,10 @@ def run_backtest(ticks, signals, stop_distance, take_profit_distance):
                     "entry_price": entry_price,
                     "stop_loss": stop_loss,
                     "take_profit": take_profit,
+                    # Entry-tick excursion: the spread is an immediate adverse
+                    # move on the exit side, so MAE starts negative.
+                    "mae": min(0.0, entry_move),
+                    "mfe": max(0.0, entry_move),
                 }
             next_signal += 1
 

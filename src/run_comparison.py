@@ -65,6 +65,7 @@ def _comparison_entry(runs_dir, run_id, public_dir) -> dict:
     return {
         "run_id": run_id,
         "created_at": detail.get("created_at"),
+        "execution_model": (result.get("execution") or {}).get("execution_model") or "engine",
         "strategy": detail.get("strategy"),
         "strategy_selector": detail.get("strategy_selector"),
         "strategy_file": detail.get("strategy_file"),
@@ -120,6 +121,7 @@ def compare_runs(runs_dir, public_dir, run_ids) -> dict:
     timeframes = {e["timeframe"] for e in entries}
     strategies = {(e["strategy"] or {}).get("name") for e in entries}
     ranges = {(e["start"], e["end"]) for e in entries}
+    models = {e["execution_model"] for e in entries}
 
     warnings = []
     if len(symbols) > 1:
@@ -138,6 +140,12 @@ def compare_runs(runs_dir, public_dir, run_ids) -> dict:
         warnings.append(
             f"Strategies differ ({', '.join(sorted(str(s) for s in strategies))}); "
             "this compares configurations, not a single strategy."
+        )
+    if len(models) > 1:
+        warnings.append(
+            f"Execution models differ ({', '.join(sorted(str(m) for m in models))}); "
+            "engine-executed and strategy-owned runs use different trade production "
+            "and are not directly comparable."
         )
     warnings.append(
         "Metrics are in price terms; no account model is present, so no normalized "
@@ -178,6 +186,7 @@ def compare_runs(runs_dir, public_dir, run_ids) -> dict:
         "timeframe": len(timeframes) > 1,
         "date_range": len(ranges) > 1,
         "strategy": len(strategies) > 1,
+        "execution_model": len(models) > 1,
         "account_currency": len(account_currencies) > 1,
         "account_model": any_account_ready and not all_account_ready,
         "account_comparable": all_account_ready

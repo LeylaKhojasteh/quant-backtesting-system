@@ -90,7 +90,7 @@ CSS = (""
 "*{box-sizing:border-box}"
 "body{margin:0;background:var(--bg);color:var(--text);"
 "font:13px/1.55 -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif}"
-".wrap{max-width:1024px;margin:0 auto;padding:24px 20px 64px}"
+".wrap{max-width:1440px;width:100%;margin:0 auto;padding:24px 24px 64px}"
 "header.top{border:1px solid var(--border);background:var(--surface);"
 "border-radius:8px;padding:16px 20px;margin-bottom:16px}"
 ".eyebrow{font-size:10.5px;letter-spacing:.12em;color:var(--muted);text-transform:uppercase}"
@@ -105,9 +105,9 @@ CSS = (""
 "dl.kv dt{color:var(--muted)}"
 "dl.kv dd{margin:0;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}"
 "table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}"
-"th,td{text-align:right;padding:6px 8px;border-bottom:1px solid var(--border);white-space:nowrap}"
-"th:first-child,td:first-child{text-align:left}"
-"th{color:var(--muted);font-weight:600;font-size:11.5px}"
+"th,td{text-align:right;padding:6px;border-bottom:1px solid var(--border);white-space:nowrap}"
+"th{text-align:center;color:var(--muted);font-weight:600;font-size:11.5px}"
+"td:first-child{text-align:left}"
 ".good{color:var(--good)}.bad{color:var(--bad)}.muted{color:var(--muted)}"
 ".badge{display:inline-block;font-size:11px;border:1px solid var(--border);"
 "border-radius:4px;padding:1px 8px;margin-right:6px}"
@@ -123,6 +123,36 @@ CSS = (""
 ".scroll{overflow-x:auto}")
 
 
+def _num_price(v: object) -> str:
+    """Price levels adapt to magnitude so FX keeps its meaningful decimals."""
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return _num(v)
+    a = abs(n)
+    digits = 2 if a >= 1000 else 3 if a >= 100 else 4 if a >= 1 else 5 if a >= 0.01 else 8
+    return f"{n:.{digits}f}".rstrip("0").rstrip(".") or "0"
+
+
+def _num_pnl(v: object) -> str:
+    """Price-term PnL / excursions: 2 decimals normally, more for small values."""
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return _num(v)
+    a = abs(n)
+    digits = 2 if a >= 1 else 4 if a >= 0.01 else 6
+    return f"{n:.{digits}f}".rstrip("0").rstrip(".") or "0"
+
+
+def _exit_label(trade: dict) -> str:
+    reason = trade.get("exit_reason")
+    detail = trade.get("exit_reason_detail")
+    if reason == "STRATEGY" and detail:
+        return f"STRATEGY ({detail})"
+    return reason
+
+
 def _rows(trades: list, acmap: dict | None = None) -> str:
     out = []
     for t in trades:
@@ -130,12 +160,12 @@ def _rows(trades: list, acmap: dict | None = None) -> str:
         c = "good" if p > 0 else ("bad" if p < 0 else "")
         cells = [_esc(t.get("trade_id")), _esc(t.get("direction")),
                  _esc(t.get("signal_available_time")), _esc(t.get("entry_time")),
-                 _num(t.get("entry_price")), _esc(t.get("exit_time")),
-                 _num(t.get("exit_price")), _esc(t.get("exit_reason"))]
+                 _num_price(t.get("entry_price")), _esc(t.get("exit_time")),
+                 _num_price(t.get("exit_price")), _esc(_exit_label(t))]
         row = ("<tr><td>" + "</td><td>".join(cells)
-               + f'</td><td class="{c}">{_num(p)}</td>'
+               + f'</td><td class="{c}">{_num_pnl(p)}</td>'
                + f"<td>{_dur(t.get('duration_seconds'))}</td>"
-               + f"<td>{_num(t.get('mae'))}</td><td>{_num(t.get('mfe'))}</td>")
+               + f"<td>{_num_pnl(t.get('mae'))}</td><td>{_num_pnl(t.get('mfe'))}</td>")
         if acmap is not None:
             a = acmap.get(int(t.get("trade_id") or 0), {})
             net = a.get("net_account_pnl")
@@ -145,6 +175,27 @@ def _rows(trades: list, acmap: dict | None = None) -> str:
                     f'<td class="{nc}">{_num(net)}</td>')
         out.append(row + "</tr>")
     return "\n".join(out)
+
+
+def _field_label(key: object) -> str:
+    text = str(key).replace("_", " ").strip()
+    return text[:1].upper() + text[1:]
+
+
+def _validation_rows(val: object) -> str:
+    """Readable validation checks; raw JSON is never shown to the reader."""
+    if not isinstance(val, dict) or not val:
+        return "<dt>Validation</dt><dd><span class='pill-na'>Not archived</span></dd>"
+    rows = []
+    for key, value in val.items():
+        if isinstance(value, bool):
+            cell = "<span class='good'>PASS</span>" if value else "<span class='bad'>FAIL</span>"
+        elif isinstance(value, (dict, list)):
+            cell = _esc(json.dumps(value, sort_keys=True))
+        else:
+            cell = _num(value)
+        rows.append(f"<dt>{_esc(_field_label(key))}</dt><dd>{cell}</dd>")
+    return "".join(rows)
 
 
 def _account_lookup(account: dict | None) -> dict | None:
@@ -263,11 +314,15 @@ def render_report(result: dict) -> str:
         ("Signals executed", _num(ex.get("signals_executed"), 0)),
         ("Signals ignored", _num(ex.get("signals_ignored"), 0)),
         ("Engine", _esc(ex.get("engine") or "src.backtest")),
+        ("Execution model", _esc(ex.get("execution_model") or "engine")),
         ("Engine window (UTC)",
          _esc(ex.get("started_at")) + " to " + _esc(ex.get("finished_at")))])
-    val = dq.get("validation", {})
+    val = dq.get("validation") or {}
     wlist = dq.get("warnings", []) or []
-    warn = "".join(f"<li>{_esc(x)}</li>" for x in wlist) or "<li>None archived.</li>"
+    warn = ("<ul class='muted'>" + "".join(f"<li class='bad'>{_esc(x)}</li>" for x in wlist)
+            + "</ul>") if wlist else "<p class='muted'>No warnings archived.</p>"
+    quality_rows = (_validation_rows(val)
+                    + f"<dt>Warnings</dt><dd>{_num(len(wlist), 0)}</dd>")
     n = len(trades)
     account_sections = (
         _account_cards(account)
@@ -282,21 +337,15 @@ def render_report(result: dict) -> str:
             "Price terms remain authoritative.</p>"
         )
         badge = "account currency"
-        balance_note = ("<p class='muted'>From archived equity points. Price-term PnL, "
-                        "not account balance.</p>")
     elif account:
         account_note = ("<p class='muted'>Account metrics Not available: "
                         + _esc(account.get("reason_unavailable") or "incomplete account model.")
                         + "</p>")
         badge = "price terms"
-        balance_note = ("<p class='muted'>From archived equity points. No balance curve: "
-                        "no account balance series archived.</p>")
     else:
         # Byte-identical to the original non-account rendering.
         account_note = "<p class='muted'>Account metrics Not available: no account model.</p>"
         badge = "price terms"
-        balance_note = ("<p class='muted'>From archived equity points. No balance curve: "
-                        "no account balance series archived.</p>")
     trade_head = ("<th>#</th><th>Dir</th><th>Signal time</th><th>Entry time</th>"
                   "<th>Entry</th><th>Exit time</th><th>Exit</th><th>Reason</th><th>PnL</th>"
                   "<th>Duration</th><th>MAE</th><th>MFE</th>")
@@ -310,9 +359,7 @@ def render_report(result: dict) -> str:
             "Quant Backtest Lab - archived research run</div>"
             f"<h1>Run {_esc(result.get('run_id'))} "
             "<span class='badge archived'>ARCHIVED</span>"
-            f"<span class='badge'>{badge}</span></h1>"
-            "<p class='sub'>From validated archived result.json. "
-            "No strategy or execution logic re-run. PnL in price terms.</p></header>"
+            f"<span class='badge'>{badge}</span></h1></header>"
             "<div class='grid'>"
             f"<section class='card'><h2>Run identity</h2><dl class='kv'>{ident}</dl></section>"
             f"<section class='card'><h2>Data / execution</h2><dl class='kv'>{data}</dl>"
@@ -323,8 +370,7 @@ def render_report(result: dict) -> str:
             f"</tr></thead><tbody>{_perf(me, trades, account_available)}</tbody></table></div>"
             f"{account_note}</section>"
             "<section class='card'><h2>Cumulative PnL (price terms)</h2>"
-            f"{_svg(eq)}"
-            f"{balance_note}</section>"
+            f"{_svg(eq)}</section>"
             f"<section class='card'><h2>Trades ({n})</h2>"
             "<div class='scroll'><table><thead><tr>"
             f"{trade_head}"
@@ -332,8 +378,8 @@ def render_report(result: dict) -> str:
             "</table></div>"
             "<p class='muted'>MAE/MFE N/A where the archive carries none.</p></section>"
             "<section class='card'><h2>Data quality</h2><dl class='kv'>"
-            f"<dt>Validation</dt><dd>{_esc(json.dumps(val) if val else '--')}</dd></dl>"
-            f"<ul class='muted'>{warn}</ul></section>"
+            f"{quality_rows}</dl>"
+            f"{warn}</section>"
             "<footer>Quant Backtest Lab archive artifact - contract "
             f"{_esc(result.get('contract_version'))} - fingerprint "
             f"<code>{_esc(cf.get('data_fingerprint'))}</code></footer>"

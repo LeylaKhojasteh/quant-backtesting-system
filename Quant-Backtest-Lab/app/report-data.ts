@@ -37,7 +37,7 @@ function runs(pnls: number[]) {
 const dur = (v: number) => `${Math.floor(v / 60)}h ${Math.floor(v % 60)}m ${Math.round(v % 1 * 60)}s`;
 const count = (items: { pnl: number }[]) => `${items.length} (${items.length ? (items.filter((t) => t.pnl > 0).length / items.length * 100).toFixed(2) : '0.00'}% won)`;
 
-type TradeRow = { id: number; direction: 'LONG' | 'SHORT'; pnl: number; reason: 'TP' | 'SL' | 'EOD'; entryMs: number; exitMs: number; spreadIn: number; spreadOut: number };
+type TradeRow = { id: number; direction: 'LONG' | 'SHORT'; pnl: number; reason: 'TP' | 'SL' | 'EOD' | 'STRATEGY'; entryMs: number; exitMs: number; spreadIn: number; spreadOut: number };
 
 function rows(run: BacktestRun): TradeRow[] {
   return run.trades.map((t) => ({
@@ -132,7 +132,7 @@ export function reportGroups(run: BacktestRun): Record<string, ReportMetric[]> {
 
   return {
     'Run & Data': [
-      metric('Strategy', run.strategy.name, `Version ${run.strategy.version} · ${run.dataMode}`, 'Run Scope'),
+      metric('Strategy', run.strategy.name, `Version ${run.strategy.version} · archived`, 'Run Scope'),
       metric('Symbol / Period', `${run.instrument.symbol} / ${run.instrument.timeframe}`, `${formatUtcMs(Date.parse(run.dateRange.startUtc), { withDate: true })} → ${formatUtcMs(Date.parse(run.dateRange.endUtc))}`, 'Run Scope'),
       metric('Inputs', `Stop ${String(run.strategy.parameters.stopDistance)} · TP ${String(run.strategy.parameters.takeProfitDistance)}`, 'Reference result inputs; current configured inputs appear in the run strip', 'Run Scope'),
       metric('Bars', String(run.dataQuality.candles ?? '—'), `${run.instrument.timeframe} candles in range`, 'Dataset'),

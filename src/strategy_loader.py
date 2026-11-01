@@ -12,7 +12,15 @@ A strategy file may expose either:
    ``Strategy``, or
 2. a legacy ``generate_signals(candles)`` function with optional module
    metadata (``NAME``/``VERSION``/``DESCRIPTION``/``PARAMETERS``), which is
-   adapted with the existing ``adapt_strategy`` helper.
+   adapted with the existing ``adapt_strategy`` helper, or
+3. an external ``run_strategy(data, ctx)`` entrypoint owned by the strategy
+   itself (strategy-owned execution): the file must also declare ``PARAMETERS``
+   as a mapping. The downstream trade pipeline is shared; only the producer
+   differs.
+
+Signal paths (1-2) are never silently substituted by the external path and
+vice versa: detection is capability-based and ordered — explicit ``Strategy``
+first, then ``generate_signals``, then ``run_strategy``.
 
 The loader validates the interface and metadata before any run: it rejects a
 missing file, an unimportable module, a missing interface, invalid metadata or
@@ -33,6 +41,31 @@ class StrategyLoadError(ValueError):
     """Raised when a strategy file cannot be loaded or is not valid."""
 
 
+#: Loader detection order: explicit Strategy -> generate_signals -> run_strategy.
+STRATEGY_KIND_SIGNAL = "signal"
+STRATEGY_KIND_EXTERNAL = "external"
+
+
+def manifest_for(strategy) -> dict:
+    """One shared strategy manifest for catalog, config and reports.
+
+    ``kind`` is ``"signal"`` (engine executes) or ``"external"``
+    (strategy-owned execution via ``run_strategy(data, ctx)``).
+    """
+    meta = strategy.metadata()
+    parameters = strategy.parameters()
+    kind = getattr(strategy, "kind", STRATEGY_KIND_SIGNAL)
+    if kind not in (STRATEGY_KIND_SIGNAL, STRATEGY_KIND_EXTERNAL):
+        kind = STRATEGY_KIND_SIGNAL
+    return {
+        "name": str(meta.get("name", "")),
+        "version": str(meta.get("version", "")),
+        "description": str(meta.get("description", "")),
+        "kind": kind,
+        "parameters": dict(parameters) if isinstance(parameters, dict) else {},
+    }
+
+
 def _accepts_parameters(fn) -> bool:
     """True when a function strategy declares a ``parameters`` keyword.
 
@@ -47,6 +80,57 @@ def _accepts_parameters(fn) -> bool:
     if "parameters" in params:
         return True
     return any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
+def _accepts_timeframe(fn) -> bool:
+    """True when a strategy accepts the market ``timeframe``.
+
+    A function/class method declaring a ``timeframe`` keyword (or
+    ``**kwargs``) receives it; plain ``generate_signals(candles)`` strategies
+    keep their current call signature and are never passed a timeframe.
+    """
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    if "timeframe" in params:
+        return True
+    return any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
+class _ExternalStrategy(strategy_base.Strategy):
+    """Adapter for strategy-owned execution via ``run_strategy(data, ctx)``.
+
+    It intentionally does NOT implement the tick engine contract: it has no
+    ``generate_signals`` semantics and is never passed to the engine. The
+    adapter only carries metadata, declared parameters, and the entrypoint.
+    """
+
+    kind = STRATEGY_KIND_EXTERNAL
+
+    def __init__(self, fn, name: str, version: str, description: str, params: dict):
+        self._fn = fn
+        self.name = name
+        self.version = version
+        self.description = description
+        self._params = dict(params)
+
+    def metadata(self):
+        return {"name": self.name, "version": self.version, "description": self.description}
+
+    def parameters(self) -> dict:
+        return dict(self._params)
+
+    def configure(self, params: dict) -> None:
+        merged = dict(self._params)
+        merged.update(params or {})
+        self._params = merged
+
+    def effective_parameters(self) -> dict:
+        return dict(self._params)
+
+    def run_strategy(self, data, ctx):
+        return self._fn(data, ctx)
 
 
 def _import_module(file_path: Path):
@@ -74,7 +158,12 @@ def _attr(module, *names, default=None):
 
 
 def _validate(strategy, file_path: Path):
-    if not callable(getattr(strategy, "generate_signals", None)):
+    if getattr(strategy, "kind", STRATEGY_KIND_SIGNAL) == STRATEGY_KIND_EXTERNAL:
+        if not callable(getattr(strategy, "run_strategy", None)):
+            raise StrategyLoadError(
+                f"strategy {file_path} has no callable run_strategy(data, ctx)"
+            )
+    elif not callable(getattr(strategy, "generate_signals", None)):
         raise StrategyLoadError(
             f"strategy {file_path} has no callable generate_signals(candles)"
         )
@@ -133,18 +222,62 @@ def load_strategy(path: str | Path):
             description=str(description),
             params=dict(params),
             passes_parameters=_accepts_parameters(fn),
+            passes_timeframe=_accepts_timeframe(fn),
         )
         return _validate(wrapped, file_path)
 
+    # 3) An external strategy-owned entrypoint: run_strategy(data, ctx).
+    run_fn = getattr(module, "run_strategy", None)
+    if callable(run_fn):
+        name = _attr(module, "NAME", "name", default=file_path.stem)
+        version = _attr(module, "VERSION", "version", default="1.0")
+        description = _attr(module, "DESCRIPTION", "description", default="")
+        params = _attr(module, "PARAMETERS", "parameters", default=None)
+        if params is None:
+            raise StrategyLoadError(
+                f"strategy {file_path} exposes run_strategy(data, ctx) but no "
+                "PARAMETERS mapping (declare strategy inputs, even if empty)"
+            )
+        if not isinstance(params, dict):
+            raise StrategyLoadError(f"strategy {file_path} PARAMETERS must be a mapping")
+        return _validate(
+            _ExternalStrategy(
+                run_fn, name=str(name), version=str(version),
+                description=str(description), params=dict(params),
+            ),
+            file_path,
+        )
+
     raise StrategyLoadError(
-        f"strategy {file_path} does not expose a Strategy or generate_signals(candles)"
+        f"strategy {file_path} does not expose a Strategy, "
+        "generate_signals(candles) or run_strategy(data, ctx)"
     )
 
 
-def generate_validated_signals(strategy, candles):
-    """Run a strategy and reject signals that violate the normalized contract."""
+def generate_validated_signals(strategy, candles, timeframe=None):
+    """Run a strategy and reject signals that violate the normalized contract.
+
+    ``timeframe`` is the market timeframe that produced ``candles``. It is
+    forwarded only to strategies that declare a ``timeframe`` keyword (or
+    ``**kwargs``); legacy ``generate_signals(candles)`` strategies are called
+    exactly as before.
+    """
     try:
-        signals = strategy.generate_signals(candles)
+        import inspect as _inspect
+
+        try:
+            params = _inspect.signature(strategy.generate_signals).parameters
+            wants_timeframe = "timeframe" in params or any(
+                p.kind is _inspect.Parameter.VAR_POSITIONAL
+                or p.kind is _inspect.Parameter.VAR_KEYWORD
+                for p in params.values()
+            )
+        except (TypeError, ValueError):
+            wants_timeframe = False
+        if wants_timeframe and timeframe is not None:
+            signals = strategy.generate_signals(candles, timeframe=timeframe)
+        else:
+            signals = strategy.generate_signals(candles)
     except Exception as exc:  # noqa: BLE001
         name = strategy.metadata().get("name", "strategy")
         raise StrategyLoadError(f"{name} generate_signals failed: {exc}") from exc

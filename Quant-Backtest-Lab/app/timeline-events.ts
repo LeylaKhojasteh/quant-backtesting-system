@@ -15,7 +15,7 @@ export type TimelineTone = 'signal' | 'entry' | 'tp' | 'sl' | 'eod' | 'neutral';
 export type TimelineTrade = {
   id: number;
   direction: 'LONG' | 'SHORT';
-  /** Epoch-ms timestamps (demo adapter) — converted to UTC ISO for display. */
+  /** Epoch-ms timestamps — converted to UTC ISO for display. */
   signal: number;
   /** Epoch-ms the signal became tradable (>= signal). Falls back to signal + one candle. */
   signalAvailable?: number;
@@ -25,7 +25,7 @@ export type TimelineTrade = {
   exit: number;
   sl?: number;
   tp?: number;
-  reason: 'TP' | 'SL' | 'EOD';
+  reason: 'TP' | 'SL' | 'EOD' | 'STRATEGY';
 };
 
 export type TimelineEvent = {
@@ -58,7 +58,7 @@ export function tradeTimelineEvents(trade: TimelineTrade): TimelineEvent[] {
   const entrySide = (long ? 'ASK' : 'BID') as 'BID' | 'ASK';
   const exitSide = (long ? 'BID' : 'ASK') as 'BID' | 'ASK';
   const tone = exitTone(trade.reason);
-  const reasonLabel = trade.reason === 'TP' ? 'Take profit' : trade.reason === 'SL' ? 'Stop loss' : 'End of data';
+  const reasonLabel = trade.reason === 'TP' ? 'Take profit' : trade.reason === 'SL' ? 'Stop loss' : trade.reason === 'STRATEGY' ? 'Strategy exit' : 'End of data';
 
   const sltp: TimelineEvent =
     trade.sl === undefined || trade.tp === undefined

@@ -62,28 +62,33 @@ def resolve_distances(
     *,
     stop_loss_pips: float | None,
     take_profit_pips: float | None,
-    stop_distance: float,
-    take_profit_distance: float,
+    stop_distance: float | None,
+    take_profit_distance: float | None,
     instrument: InstrumentSpec | None,
     symbol: str | None = None,
-) -> tuple[float, float, float | None]:
+) -> tuple[float | None, float | None, float | None]:
     """Resolve SL/TP to **price distances** (what the engine consumes).
 
     - pip intent present -> convert once via the resolved pip size.
-    - otherwise -> legacy price distances returned unchanged (``pip_size`` None).
+    - otherwise -> price distances returned unchanged (``pip_size`` None).
+    - ``None`` stays ``None``: that exit is disabled.
     Returns ``(effective_stop, effective_take, pip_size_used)``.
     """
     if stop_loss_pips is None and take_profit_pips is None:
-        return float(stop_distance), float(take_profit_distance), None
+        return _as_float(stop_distance), _as_float(take_profit_distance), None
     pip_size = require_pip_size(instrument, symbol)
     effective_stop = (
         price_distance_from_pips(stop_loss_pips, pip_size)
         if stop_loss_pips is not None
-        else float(stop_distance)
+        else _as_float(stop_distance)
     )
     effective_take = (
         price_distance_from_pips(take_profit_pips, pip_size)
         if take_profit_pips is not None
-        else float(take_profit_distance)
+        else _as_float(take_profit_distance)
     )
     return effective_stop, effective_take, pip_size
+
+
+def _as_float(value: float | None) -> float | None:
+    return None if value is None else float(value)

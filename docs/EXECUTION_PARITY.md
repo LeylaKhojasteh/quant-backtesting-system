@@ -19,7 +19,17 @@ positions in account currency.
 
 Input (ticks): `timestamp`, `bid`, `ask`
 Input (signals): `signal_candle_start`, `signal_available_time`, `direction`
-Input (execution): `stop_distance`, `take_profit_distance` — price distances.
+Input (execution): `stop_distance`, `take_profit_distance` — optional price
+distances. `None` disables that exit; with both disabled the position closes at
+the end of the selected data (`END_OF_DATA`).
+
+Strategy-owned execution (contract 1.1): a strategy file may produce trades
+itself via `run_strategy(data, ctx)` instead of emitting signals for the tick
+engine. Those runs carry `execution_model: "strategy"` and `exit_reason:
+STRATEGY` with the raw reason preserved. Lookahead prevention is no longer
+structural there — it is the strategy author's responsibility — so such runs
+are labeled, shown with "not supplied" excursion fields, excluded from grid
+studies in v1, and flagged when compared against engine-executed runs.
 
 Out of scope: candle construction (upstream), account-currency conversion,
 commission and volume accounting (downstream), strategy behaviour.
@@ -42,6 +52,7 @@ commission and volume accounting (downstream), strategy behaviour.
 | 10 | **End of data** | An open position is closed on the last tick with reason `END_OF_DATA` (mapped to `EOD` by the result contract). LONG closes at the last BID, SHORT at the last ASK. |
 | 11 | **Precision / rounding** | All arithmetic is float64. The engine performs **no rounding**; values are rounded/formatted only when presented. Parity comparisons use a `1e-9` tolerance for prices. |
 | 12 | **Volume / commission** | The engine is unitless and price-termed: no position volume, no commission, no slippage model. Account-currency results, if any, are derived downstream from price PnL and a run-level account model. |
+| 13 | **MAE / MFE** | Tracked on the **exit side** on every tick while the position is open: `LONG` uses BID, `SHORT` uses ASK. The entry tick is included, so the entry spread is an immediate adverse move. `mae = min(move)` (signed, `<= 0`), `mfe = max(move)` (signed, `>= 0`), in price terms. The exit tick is included, so a gap through SL/TP is reflected. |
 
 ### Additional invariants
 

@@ -33,16 +33,19 @@ def parameter_descriptor(default) -> dict:
 
 
 def catalog_entry(identifier: str, strategy, *, source: str, file: str | None) -> dict:
-    meta = strategy.metadata()
-    parameters = strategy.parameters()
+    manifest = strategy_loader.manifest_for(strategy)
     return {
         "id": identifier,
-        "name": meta.get("name", ""),
-        "version": meta.get("version", ""),
-        "description": meta.get("description", ""),
+        "name": manifest["name"],
+        "version": manifest["version"],
+        "description": manifest["description"],
+        "kind": manifest["kind"],
+        "execution_model": "strategy" if manifest["kind"] == "external" else "engine",
         "source": source,
         "file": file,
-        "parameters": {key: parameter_descriptor(value) for key, value in parameters.items()},
+        "parameters": {
+            key: parameter_descriptor(value) for key, value in manifest["parameters"].items()
+        },
     }
 
 

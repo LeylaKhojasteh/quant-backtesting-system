@@ -1,14 +1,14 @@
 /**
  * Quant Backtest Lab — canonical result contract.
  *
- * A BacktestRun is the single source of truth the UI reads. It is produced by
- * `loadBacktestRun()` and validated on entry; the UI never reads `trades`,
- * `cumulative` or scattered constants directly.
+ * A BacktestRun is the single source of truth the UI reads. It is mapped from
+ * an archived Python engine result and validated on entry; the UI never reads
+ * `trades`, `cumulative` or scattered constants directly.
  *
  * Two families of numbers live side by side and must never be conflated:
  *
- *   - price terms  — PnL expressed as instrument price points (the only thing
- *                    the seeded demo and the price-term engine actually produce).
+ *   - price terms  — PnL expressed as instrument price points (what the
+ *                    price-term engine produces).
  *   - account terms — PnL expressed in the account currency, derived from
  *                    contract size, lot sizing, commission, swap, slippage and
  *                    FX conversion.
@@ -20,10 +20,7 @@
  */
 import { z } from 'zod';
 
-export const DATA_MODE = ['seeded-demo', 'live'] as const;
-export type DataMode = (typeof DATA_MODE)[number];
-
-export const DataQualityStatus = ['pending', 'measured', 'demo'] as const;
+export const DataQualityStatus = ['pending', 'measured'] as const;
 export type DataQualityStatus = (typeof DataQualityStatus)[number];
 
 export const TradeSchema = z.object({
@@ -44,6 +41,12 @@ export const TradeSchema = z.object({
   pnl: z.number(),
   spreadIn: z.number(),
   spreadOut: z.number(),
+  /**
+   * Maximum Adverse / Favorable Excursion in price terms, on the exit side.
+   * MAE is signed (<= 0), MFE is signed (>= 0). Absent on legacy archives.
+   */
+  mae: z.number().nullish(),
+  mfe: z.number().nullish(),
   /** Account-side fields. Present only when accountReady. */
   volume: z.number().optional(),
   commission: z.number().optional(),
@@ -51,7 +54,9 @@ export const TradeSchema = z.object({
   slippage: z.number().optional(),
   /** PnL converted to account currency, if and only if accountReady. */
   pnlCurrency: z.number().optional(),
-  reason: z.enum(['TP', 'SL', 'EOD']),
+  reason: z.enum(['TP', 'SL', 'EOD', 'STRATEGY']),
+  /** Raw strategy-owned reason when reason === 'STRATEGY', else absent/null. */
+  reasonDetail: z.string().nullish(),
 });
 export type Trade = z.infer<typeof TradeSchema>;
 
@@ -72,7 +77,7 @@ export type EquityPoint = z.infer<typeof EquityPointSchema>;
 export const AccountSchema = z.object({
   /**
    * ISO-4217 currency code when an account model exists, otherwise null.
-   * Null here is what makes accountReady false for the demo.
+    * Null here makes accountReady false for a price-term-only run.
    */
   currency: z.string().nullable(),
   initialBalance: z.number().nullish(),
@@ -102,6 +107,14 @@ export const InstrumentSchema = z.object({
   symbol: z.string(),
   timeframe: z.string(),
   timezone: z.string(),
+  assetClass: z.string().nullish(),
+  quoteCurrency: z.string().nullish(),
+  contractSize: z.number().nullish(),
+  tickSize: z.number().nullish(),
+  pipSize: z.number().nullish(),
+  digits: z.number().int().nonnegative().nullish(),
+  priceScale: z.number().nullish(),
+  session: z.string().nullish(),
 });
 export type Instrument = z.infer<typeof InstrumentSchema>;
 
@@ -116,10 +129,6 @@ export type DataSource = z.infer<typeof DataSourceSchema>;
 
 export const DataQualitySchema = z.object({
   status: z.enum(DataQualityStatus),
-  /**
-   * Demo value only, and only shown when the caller marks it as such.
-   * A `demo` status must render as "Not measured" in the UI.
-   */
   modelingQuality: z.number().nullish(),
   candles: z.number().int().nonnegative().nullish(),
   totalTicks: z.number().int().nonnegative().nullish(),
@@ -194,13 +203,14 @@ export const ExecutionSummarySchema = z.object({
   engine: z.string().nullish(),
   startedAtUtc: z.string().nullish(),
   finishedAtUtc: z.string().nullish(),
+  /** engine | strategy. Absent on pre-1.1 mappings: engine is assumed. */
+  executionModel: z.string().nullish(),
 });
 export type ExecutionSummary = z.infer<typeof ExecutionSummarySchema>;
 
 export const BacktestRunSchema = z.object({
   runId: RunIdSchema,
   runTimestampUtc: z.string().datetime({ offset: false }),
-  dataMode: z.enum(DATA_MODE),
   strategy: StrategySchema,
   instrument: InstrumentSchema,
   /** Requested backtest window, ISO-8601 UTC. Authoritative for display. */
@@ -216,9 +226,9 @@ export const BacktestRunSchema = z.object({
   /** Ordered by exit time. Always length >= trades.length (one point per exit). */
   equity: z.array(EquityPointSchema),
   metrics: MetricsSchema,
-  /** Real engine execution/signal accounting. Absent for seeded fixture runs. */
+  /** Real engine execution/signal accounting. Absent on legacy archives. */
   execution: ExecutionSummarySchema.optional(),
-  /** Non-fatal notes surfaced to the user, e.g. "demo data — not measured". */
+  /** Non-fatal notes surfaced to the user. */
   warnings: z.array(z.string()).default([]),
   /** Explicit limitations so nothing is overstated. */
   limitations: z.array(z.string()).default([]),

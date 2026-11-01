@@ -29,6 +29,8 @@ export interface StrategyInfo {
   description: string;
   source: 'builtin' | 'file' | string;
   file: string | null;
+  kind?: 'signal' | 'external' | string;
+  execution_model?: 'engine' | 'strategy' | string;
   parameters: Record<string, StrategyParameterDescriptor>;
 }
 
@@ -39,6 +41,7 @@ export interface DatasetInfo {
   provider_label: string;
   data_type: string;
   timezone: string;
+  source_timezone?: string;
   label: string;
   subtitle: string;
   coverage_start: string | null;
@@ -46,6 +49,7 @@ export interface DatasetInfo {
   years: number[];
   complete_years: number[];
   partial_months: string[];
+  unknown_months?: string[];
   supported_timeframes: string[];
   prepared_timeframes: string[];
   tick_ready: boolean;
@@ -200,7 +204,7 @@ export interface RunResponse {
   strategy: { name: string; version: string; description: string };
   parameters: Record<string, unknown>;
   market: { symbol: string; timeframe: string; start: string; end: string };
-  execution: { stop_distance: number; take_profit_distance: number };
+  execution: { stop_distance: number | null; take_profit_distance: number | null };
   summary: RunSummary;
   archive: { directory: string; result: string; report: string | null };
   published: boolean;
@@ -290,6 +294,13 @@ export interface InstrumentInfo {
   tick_size: number | null;
   /** Price value of one pip (instrument metadata); null when unknown. */
   pip_size: number | null;
+  asset_class?: string | null;
+  digits?: number | null;
+  price_scale?: number | null;
+  session?: string | null;
+  leverage?: number | null;
+  margin_rate?: number | null;
+  swap?: number | null;
 }
 
 export async function listInstruments(fetchImpl?: typeof fetch): Promise<InstrumentInfo[]> {
@@ -368,6 +379,7 @@ export interface RunJob {
 export async function startRunJob(
   payload: BacktestRunRequestPayload,
   fetchImpl?: typeof fetch,
+  signal?: AbortSignal,
 ): Promise<RunJob> {
   const data = await requestJson<{ job: RunJob }>(
     '/run-jobs',
@@ -375,6 +387,7 @@ export async function startRunJob(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+      ...(signal ? { signal } : {}),
     },
     fetchImpl,
   );
@@ -610,7 +623,7 @@ export type ObjectiveMetric =
 export interface OptimizationPayload {
   strategy: string;
   market: { dataset_id?: string; symbol: string; timeframe?: string; start?: string | null; end?: string | null; data_source?: string };
-  execution: { stop_distance: number; take_profit_distance: number };
+  execution: { stop_distance: number | null; take_profit_distance: number | null };
   strategy_grid: Record<string, unknown[]>;
   execution_grid: Record<string, number[]>;
   objective: { metric: ObjectiveMetric; direction: 'maximize' | 'minimize' };
@@ -703,7 +716,7 @@ export interface WalkForwardWindowPayload {
 export interface WalkForwardPayload {
   strategy: string;
   market: { dataset_id?: string; symbol: string; timeframe?: string; start?: string | null; end?: string | null; data_source?: string };
-  execution: { stop_distance: number; take_profit_distance: number };
+  execution: { stop_distance: number | null; take_profit_distance: number | null };
   strategy_grid: Record<string, unknown[]>;
   execution_grid: Record<string, number[]>;
   objective: { metric: ObjectiveMetric; direction: 'maximize' | 'minimize' };

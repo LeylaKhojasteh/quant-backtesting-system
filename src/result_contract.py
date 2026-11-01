@@ -13,27 +13,51 @@ Conventions (shared with the frontend ``BacktestRun`` schema):
 - Timestamps are ISO-8601 UTC strings (``...Z``), never naive datetimes.
 - PnL is in instrument price terms unless an account model says otherwise.
   Account-currency fields stay ``None`` until an account model exists.
-- MAE/MFE are optional: the current engine does not produce excursions,
-  so a result built from engine output carries ``mae=None, mfe=None``
-  rather than invented values.
+- MAE/MFE are optional for backward compatibility: current engine output
+  carries observed excursions (MAE ``<= 0``, MFE ``>= 0``, price terms),
+  while legacy archives without excursions keep ``mae=None, mfe=None``.
 """
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 import json
 from pathlib import Path
 
 
-CONTRACT_VERSION = "1.0"
+#: Additive contract change for strategy-owned execution: the enum stays
+#: closed, the producer model is recorded, and raw strategy reasons are kept.
+CONTRACT_VERSION = "1.1"
 
-EXIT_REASONS = ("TP", "SL", "EOD")
+#: Engine-owned exits: TP | SL | EOD (canonical, unchanged).
+ENGINE_EXIT_REASONS = ("TP", "SL", "EOD")
+
+#: Full closed enum. ``STRATEGY`` covers any strategy-owned exit reason; the
+#: original text is preserved in ``TradeRecord.exit_reason_detail`` so nothing
+#: is silently relabeled (e.g. ``opposite_breakout`` stays inspectable).
+EXIT_REASONS = ("TP", "SL", "EOD", "STRATEGY")
+
+#: Who produced the trades: ``engine`` (tick engine, default, backward
+#: compatible) or ``strategy`` (strategy-owned execution).
+EXECUTION_MODELS = ("engine", "strategy")
 
 # Engine emits "END_OF_DATA" for a position closed at the end of the data.
 # The contract canonicalizes it to "EOD" so engine output, stored runs and
 # the UI vocabulary stay identical. The engine itself is not modified.
 ENGINE_EXIT_REASON_MAP = {"TP": "TP", "SL": "SL", "END_OF_DATA": "EOD"}
+
+# Strategy-owned exit reasons canonicalized to the closed enum. Unknown
+# tokens fall through to ``STRATEGY`` with the raw text preserved.
+STRATEGY_EXIT_REASON_MAP = {
+    "STOP_LOSS": "SL",
+    "STOP_LOSS_GAP": "SL",
+    "TAKE_PROFIT": "TP",
+    "TAKE_PROFIT_GAP": "TP",
+    "END_OF_DATA": "EOD",
+}
+
+END_OF_DATA_REASONS = {"END_OF_DATA", "end_of_data", "EOD"}
 
 
 def utc_now_iso() -> str:
@@ -66,6 +90,8 @@ class RunConfig:
     # requested window safely falls back to the observed coverage.
     requested_start: str = ""
     requested_end: str = ""
+    #: Optional instrument metadata snapshot (data-driven registry or explicit).
+    instrument: dict | None = None
 
 
 @dataclass
@@ -78,17 +104,22 @@ class TradeRecord:
     signal_available_time: str
     entry_time: str
     entry_price: float
-    stop_loss: float
-    take_profit: float
+    #: None when that exit is disabled for the run (optional SL/TP).
+    stop_loss: float | None
+    take_profit: float | None
     exit_time: str
     exit_price: float
-    exit_reason: str  # TP | SL | EOD
+    exit_reason: str  # TP | SL | EOD | STRATEGY
     pnl_price: float
     duration_seconds: float
     spread_at_entry: float
     spread_at_exit: float
     mae: float | None = None
     mfe: float | None = None
+    #: Raw strategy-owned reason (e.g. ``opposite_breakout``). None for
+    #: engine-owned trades (whose canonical reason is self-describing) and
+    #: for every archive written before this field existed.
+    exit_reason_detail: str | None = None
 
 
 @dataclass
@@ -142,6 +173,9 @@ class ExecutionInfo:
     signals_received: int | None = None
     signals_executed: int | None = None
     signals_ignored: int | None = None
+    #: Who produced the trades: ``engine`` (default, every archive before this
+    #: field existed) or ``strategy`` (strategy-owned execution).
+    execution_model: str = "engine"
 
 
 @dataclass
@@ -177,11 +211,11 @@ class BacktestResult:
             created_at=data["created_at"],
             strategy=StrategyInfo(**data["strategy"]),
             config=RunConfig(**data["config"]),
-            trades=[TradeRecord(**t) for t in data["trades"]],
+            trades=[_trade_from_dict(t) for t in data["trades"]],
             equity=[EquityPoint(**e) for e in data["equity"]],
             metrics=Metrics(**data["metrics"]),
             data_quality=DataQuality(**data["data_quality"]),
-            execution=ExecutionInfo(**data["execution"]),
+            execution=_execution_from_dict(data["execution"]),
             account=data.get("account"),
         )
 
@@ -220,7 +254,48 @@ class BacktestResult:
                 errors.append(f"trade {t.trade_id}: invalid exit_reason {t.exit_reason!r}")
         if len(self.equity) < len(self.trades):
             errors.append("equity must hold at least one point per trade")
+        if self.execution.execution_model not in EXECUTION_MODELS:
+            errors.append(
+                f"invalid execution_model {self.execution.execution_model!r}"
+            )
         return errors
+
+
+def _trade_from_dict(data: dict) -> TradeRecord:
+    """Tolerate trade dicts from before ``exit_reason_detail`` existed."""
+    payload = dict(data)
+    payload.setdefault("exit_reason_detail", None)
+    # Ignore forward-compat extras so newer archives stay loadable.
+    known = {f.name for f in fields(TradeRecord)}
+    return TradeRecord(**{k: v for k, v in payload.items() if k in known})
+
+
+def _execution_from_dict(data: dict) -> ExecutionInfo:
+    """Tolerate execution dicts from before ``execution_model`` existed."""
+    payload = dict(data)
+    if "execution_model" not in payload or payload["execution_model"] is None:
+        payload["execution_model"] = "engine"
+    return ExecutionInfo(**payload)
+
+
+def canonicalize_strategy_exit_reason(raw: object) -> tuple[str, str | None]:
+    """Map a strategy-owned reason to the closed enum.
+
+    Returns ``(canonical, detail)`` where ``detail`` keeps the raw text when
+    the reason is not one of the engine-level tokens.
+    """
+    text = "" if raw is None else str(raw).strip()
+    upper = text.upper()
+    if upper in ("TP", "SL", "EOD"):
+        return upper, None
+    if upper in END_OF_DATA_REASONS:
+        return "EOD", None
+    mapped = STRATEGY_EXIT_REASON_MAP.get(upper)
+    if mapped is not None:
+        return mapped, None if mapped in ("TP", "SL", "EOD") else text or None
+    if text:
+        return "STRATEGY", text
+    raise ValueError("exit_reason must be a non-empty string")
 
 
 def compute_metrics(trades: list[TradeRecord]) -> Metrics:
@@ -273,6 +348,17 @@ def _iso(value) -> str:
     return text.replace("+00:00", "Z") if text.endswith("+00:00") else text
 
 
+def _optional_float(value) -> float | None:
+    """Optional numeric engine column: missing/NaN stays None, never zero."""
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if number != number else number  # NaN check
+
+
 def trades_from_engine(trades_df) -> list[TradeRecord]:
     """Adapt the engine's trade DataFrame to contract records.
 
@@ -282,6 +368,10 @@ def trades_from_engine(trades_df) -> list[TradeRecord]:
     records = []
     for _, row in trades_df.iterrows():
         reason = ENGINE_EXIT_REASON_MAP.get(row["exit_reason"], row["exit_reason"])
+        if reason not in EXIT_REASONS:
+            raise ValueError(
+                f"engine exit_reason {row['exit_reason']!r} is not in the closed enum"
+            )
         records.append(
             TradeRecord(
                 trade_id=int(row["trade_id"]),
@@ -290,8 +380,8 @@ def trades_from_engine(trades_df) -> list[TradeRecord]:
                 signal_available_time=_iso(row["signal_available_time"]),
                 entry_time=_iso(row["entry_time"]),
                 entry_price=float(row["entry_price"]),
-                stop_loss=float(row["stop_loss"]),
-                take_profit=float(row["take_profit"]),
+                stop_loss=_optional_float(row.get("stop_loss")),
+                take_profit=_optional_float(row.get("take_profit")),
                 exit_time=_iso(row["exit_time"]),
                 exit_price=float(row["exit_price"]),
                 exit_reason=reason,
@@ -299,6 +389,8 @@ def trades_from_engine(trades_df) -> list[TradeRecord]:
                 duration_seconds=float(row["duration_seconds"]),
                 spread_at_entry=float(row["spread_at_entry"]),
                 spread_at_exit=float(row["spread_at_exit"]),
+                mae=_optional_float(row.get("mae")),
+                mfe=_optional_float(row.get("mfe")),
             )
         )
     return records

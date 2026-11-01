@@ -21,7 +21,11 @@ Two accepted call conventions (the loader inspects the signature):
 - `generate_signals(candles)` — no parameters.
 - `generate_signals(candles, parameters)` — receives the effective parameter dict
   (declared defaults merged with user overrides).
-- The builtin `candle_direction` uses `generate_signals(candles, timeframe="15min")`.
+- `generate_signals(candles, timeframe=...)` — receives the market timeframe that
+  produced `candles` (e.g. `"15min"`, `"1h"`); combinable with `parameters`.
+- The builtin `candle_direction` uses `generate_signals(candles, timeframe=None)`
+  where `None` infers one bar from the candle index; runs always pass the market
+  timeframe explicitly.
 
 ## Candles
 
@@ -75,4 +79,35 @@ def generate_signals(candles, parameters):
 ```
 
 Imported strategies are validated: the loader rejects files that cannot be loaded,
-that omit `generate_signals`, or whose signals violate the normalized contract.
+that omit `generate_signals` / `run_strategy`, or whose signals violate the normalized contract.
+
+## Strategy-owned execution (v1, single runs only)
+
+A file may own execution instead of emitting signals by exposing
+`run_strategy(data, ctx)` with a declared `PARAMETERS` mapping:
+
+```python
+NAME = "EMA 9/20 Cross"
+VERSION = "1.0"
+PARAMETERS = {"warmup_bars": 200}  # strategy-owned inputs only
+
+def run_strategy(data, ctx):
+    # data.candles: OHLC frame (UTC index), already ranged + resampled.
+    # ctx.parameters: effective strategy inputs from the UI.
+    # ctx.instrument / ctx.account: contract_size, lots, balance (or None).
+    # ctx.run_engine(signals): optional tick engine for this run's ticks.
+    trades, equity, summary = run_backtest(df=..., lots=..., ...)
+    return trades  # or (trades, equity, summary)
+```
+
+Contract for the returned trade table (6 required columns):
+`direction` (`BUY`/`SELL`/`LONG`/`SHORT`), `entry_time`, `exit_time`,
+`entry_price`, `exit_price`, `exit_reason`. Optional: `stop_loss`,
+`take_profit`, `gross_pnl` (money) or `pnl_price` (price terms).
+`pnl_price` is derived from `gross` money only; commission flows to the
+account block, never into price-term fields.
+
+Ownership: Quant owns data/range/timeframe/UI parameters, normalization,
+metrics and reports. The file owns entry/exit only. Optimization and
+walk-forward reject `external` strategies in v1; the UI labels such runs
+`strategy-owned` and comparisons across execution models are flagged.

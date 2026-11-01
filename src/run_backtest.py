@@ -37,6 +37,7 @@ import argparse
 import hashlib
 import inspect
 import json
+import shutil
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -97,7 +98,8 @@ def _parse_args(argv=None):
         default="candle_direction",
         help="Built-in strategy name (candle_direction) or path to a strategy .py file",
     )
-    parser.add_argument("--symbol", default="XAUUSD")
+    parser.add_argument("--symbol", default=None,
+                        help="instrument symbol; inferred from the monthly filename when omitted")
     parser.add_argument("--timeframe", default="15min")
     parser.add_argument("--data", required=True, help="Tick CSV with timestamp,bid,ask columns")
     parser.add_argument("--start", default=None, help="UTC start, e.g. 2025-01-01")
@@ -110,10 +112,10 @@ def _parse_args(argv=None):
         default=[],
         help="strategy parameter override key=value (repeatable; must be declared by the strategy)",
     )
-    parser.add_argument("--stop-distance", type=float, default=5.0,
-                        help="execution stop distance in price terms")
-    parser.add_argument("--take-profit-distance", type=float, default=10.0,
-                        help="execution take-profit distance in price terms")
+    parser.add_argument("--stop-distance", type=float, default=None,
+                        help="execution stop distance in price terms (omit = no stop)")
+    parser.add_argument("--take-profit-distance", type=float, default=None,
+                        help="execution take-profit distance in price terms (omit = no target)")
     parser.add_argument("--no-report", action="store_true",
                         help="skip writing report.html (default: report is generated)")
     parser.add_argument("--publish", action="store_true",
@@ -123,6 +125,19 @@ def _parse_args(argv=None):
     args = parser.parse_args(argv)
     if args.publish and args.no_report:
         parser.error("--publish requires report generation; do not combine with --no-report")
+    if args.stop_distance is not None and args.stop_distance <= 0:
+        parser.error("--stop-distance must be > 0 when provided")
+    if args.take_profit_distance is not None and args.take_profit_distance <= 0:
+        parser.error("--take-profit-distance must be > 0 when provided")
+    if not args.symbol:
+        from src import data_engine
+        meta = data_engine.parse_source_filename(Path(args.data).name)
+        if not meta or not meta.get("symbol"):
+            parser.error(
+                "--symbol is required when the filename is not "
+                "<symbol>_<provider>_<YYYY>_<MM>_ticks.csv"
+            )
+        args.symbol = meta["symbol"]
     return args
 
 
@@ -130,15 +145,37 @@ def _load_ticks(data_path: Path):
     """Load ticks from CSV. Accepts the engine's ``timestamp,bid,ask`` shape
     or headerless Dukascopy exports (``date,time,bid,ask,...``)."""
     import pandas as pd
+    from src import data_engine
 
+    source_meta = data_engine.parse_source_filename(Path(data_path).name)
+    source_tz = data_engine.source_timezone_for(
+        Path(data_path).name, source_meta.get("provider") if source_meta else None
+    )
     probe = pd.read_csv(data_path, nrows=1)
-    if {"timestamp", "bid", "ask"} <= set(probe.columns):
-        return pd.read_csv(data_path, parse_dates=["timestamp"])
+    probe.columns = [str(c).strip().lower() for c in probe.columns]
+    columns = set(probe.columns)
+    if {"timestamp", "bid", "ask"} <= columns:
+        frame = pd.read_csv(data_path)
+        frame.columns = [str(c).strip().lower() for c in frame.columns]
+        frame["timestamp"] = data_engine.parse_timestamps(
+            frame["timestamp"], timezone_name=source_tz
+        )
+        frame["bid"] = pd.to_numeric(frame["bid"], errors="coerce")
+        frame["ask"] = pd.to_numeric(frame["ask"], errors="coerce")
+        return frame
+    if {"open", "high", "low", "close"} <= columns:
+        raise ValueError(
+            "OHLCV candles are not supported; provide tick timestamp,bid,ask"
+        )
+    if "price" in columns:
+        raise ValueError(
+            "trade-only price/volume data is not supported; provide bid and ask"
+        )
     raw = pd.read_csv(data_path, header=None)
     if raw.shape[1] < 4:
         raise ValueError(f"tick file has {raw.shape[1]} columns; expected timestamp,bid,ask or Dukascopy date,time,bid,ask")
-    stamps = pd.to_datetime(
-        raw[0].astype(str) + " " + raw[1].astype(str), format="%Y.%m.%d %H:%M:%S.%f", utc=True
+    stamps = data_engine._timestamp_from_strings(
+        raw[0], raw[1], timezone_name=source_tz
     )
     return pd.DataFrame({"timestamp": stamps, "bid": raw[2].astype(float), "ask": raw[3].astype(float)})
 
@@ -158,6 +195,13 @@ def _data_fingerprint(market) -> str:
         return data_engine.cache_fingerprint(
             market.data_source, symbol=market.symbol, start=market.start, end=market.end)
     return _fingerprint(Path(market.data_source))
+
+
+def _empty_external_signals():
+    """Empty signal frame for strategy-owned runs (signal accounting stays valid)."""
+    import pandas as pd
+
+    return pd.DataFrame(columns=["signal_candle_start", "signal_available_time", "direction"])
 
 
 def execute_run(
@@ -222,6 +266,9 @@ def execute_run(
             # The Data Engine reader already returns canonical ticks: UTC tz-aware,
             # filtered to the requested range, and chronologically ordered. Avoid
             # redundant full-frame copies (tz convert / range filter / sort).
+            # The sorted-frame contract is recorded so downstream stages can
+            # skip their own defensive re-sort without changing any logic.
+            ticks.attrs["qbl_sorted"] = "timestamp"
             if getattr(ticks["timestamp"].dt, "tz", None) is None:
                 ticks["timestamp"] = ticks["timestamp"].dt.tz_localize("UTC")
         else:
@@ -260,27 +307,91 @@ def execute_run(
                 ) from exc
         raise run_errors.InvalidDatasetError(f"failed to load dataset {data_path}: {exc}") from exc
 
-    # Hand the strategy its effective parameters, then generate normalized
-    # signals. Strategy parameters influence signals only.
-    strategy.configure(effective_parameters)
-    signals = strategy_loader.generate_validated_signals(strategy, candles)
+    # Read-only validation before the engine. It never mutates ticks, candles
+    # or the raw source; gap/duplicate/order findings are warnings, while
+    # non-finite/crossed/invalid timestamps stop the run.
+    # Imported at call time so the async worker can wrap it with an honest
+    # "Validating ticks" stage event (no silent gap after Candles loaded).
+    # Cached-partition path: per-month reports are reused by fingerprint, so
+    # repeat runs over unchanged data validate in seconds. Raw-CSV runs keep
+    # the full direct validation (no cache exists for them).
+    if cache_run:
+        from src import data_engine as _de_mod
 
-    started = utc_now_iso()
-    # The engine receives only normalized signals plus execution settings.
-    try:
-        trades_df = engine.run_backtest(
-            ticks,
-            signals,
-            request.execution.stop_distance,
-            request.execution.take_profit_distance,
+        tick_report = _de_mod.validate_range(
+            data_source, symbol=request.market.symbol,
+            start=request.market.start, end=request.market.end, frame=ticks,
         )
-    except run_errors.RunError:
-        raise
-    except Exception as exc:
-        raise run_errors.BacktestFailedError(f"backtest failed: {exc}") from exc
-    finished = utc_now_iso()
+    else:
+        from src import tick_validation as _tick_validation_mod
 
-    records = trades_from_engine(trades_df)
+        tick_report = _tick_validation_mod.validate_ticks(ticks)
+    if tick_report.fatal:
+        raise run_errors.InvalidDatasetError("; ".join(tick_report.errors))
+    data_warnings = list(tick_report.warnings)
+    data_validation = dict(tick_report.validation)
+
+    resolved_instrument = accounting.resolve_instrument(
+        request.market.symbol, request.instrument
+    )
+
+    # Hand the strategy its effective parameters, then generate normalized
+    # signals. Strategy parameters influence signals only; the market
+    # timeframe is forwarded so candle-close timing matches the resampled
+    # candles (no hardcoded bar size inside strategies).
+    strategy_kind = getattr(strategy, "kind", "signal")
+    if strategy_kind == "external":
+        # Strategy-owned execution: the file produces the trades itself from
+        # Quant-owned data. One branch only; everything after trades_df is the
+        # shared pipeline (records -> metrics -> equity -> result -> archive).
+        from src import external_strategy as _external
+
+        strategy.configure(effective_parameters)
+        started = utc_now_iso()
+        try:
+            trades_df, _external_output = _external.run_external(
+                strategy, candles,
+                parameters=effective_parameters,
+                instrument=resolved_instrument,
+                account=request.account,
+                symbol=request.market.symbol,
+                timeframe=request.market.timeframe,
+                range_start=request.market.start,
+                range_end=request.market.end,
+                ticks=ticks,
+            )
+        except run_errors.RunError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - strategy failures surface loudly
+            raise run_errors.BacktestFailedError(f"external strategy failed: {exc}") from exc
+        finished = utc_now_iso()
+        records = trades_from_engine(trades_df)
+        for record, (_, row) in zip(records, trades_df.iterrows()):
+            detail = row.get("_exit_reason_detail")
+            if record.exit_reason == "STRATEGY" and detail:
+                record.exit_reason_detail = str(detail)
+        signals = _empty_external_signals()
+    else:
+        strategy.configure(effective_parameters)
+        signals = strategy_loader.generate_validated_signals(
+            strategy, candles, timeframe=request.market.timeframe
+        )
+        started = utc_now_iso()
+        # The engine receives only normalized signals plus execution settings.
+        try:
+            trades_df = engine.run_backtest(
+                ticks,
+                signals,
+                request.execution.stop_distance,
+                request.execution.take_profit_distance,
+            )
+        except run_errors.RunError:
+            raise
+        except Exception as exc:
+            raise run_errors.BacktestFailedError(f"backtest failed: {exc}") from exc
+        finished = utc_now_iso()
+
+        records = trades_from_engine(trades_df)
     metrics = compute_metrics(records)
     equity = equity_from_trades(records)
     meta = strategy.metadata()
@@ -320,6 +431,7 @@ def execute_run(
             data_fingerprint=_data_fingerprint(request.market),
             requested_start=requested_start,
             requested_end=requested_end,
+            instrument=resolved_instrument.to_dict() if resolved_instrument is not None else None,
         ),
         trades=records,
         equity=equity,
@@ -328,7 +440,11 @@ def execute_run(
             data_source=archive_source,
             tick_count=len(ticks),
             candle_count=len(candles),
-            validation={"signals_valid": True},
+            validation={
+                "signals_valid": True,
+                **data_validation,
+            },
+            warnings=data_warnings,
         ),
         execution=ExecutionInfo(
             started_at=started,
@@ -336,17 +452,13 @@ def execute_run(
             signals_received=len(signals),
             signals_executed=len(records),
             signals_ignored=max(0, len(signals) - len(records)),
+            execution_model="strategy" if strategy_kind == "external" else "engine",
         ),
     )
 
     # Optional account/economics layer. Strictly post-processing of the
     # authoritative price-term result: it never touches execution prices or the
     # price-term metrics. No account model -> account stays None (unchanged).
-    resolved_instrument = None
-    if request.account is not None or request.execution.pip_size is not None:
-        # Account runs need economics; pip-based runs need the instrument so the
-        # archive records the pip metadata that produced the effective distances.
-        resolved_instrument = accounting.resolve_instrument(request.market.symbol, request.instrument)
     if request.account is not None:
         if resolved_instrument is None:
             result.account = accounting.unavailable_report(
@@ -381,13 +493,22 @@ def execute_run(
             data_source, symbol=request.market.symbol, timeframe=request.market.timeframe,
             start=request.market.start, end=request.market.end,
         )
+    else:
+        from src import data_engine
+        source_meta = data_engine.parse_source_filename(data_path.name)
+        config["market"]["source_timezone"] = data_engine.source_timezone_for(
+            data_path.name, source_meta.get("provider") if source_meta else None
+        )
     strategy_source = None
     if strategy_path is not None and strategy_path.is_file():
         # Archive the actual strategy file for a generic (path-loaded) strategy.
         strategy_source = strategy_path.read_text(encoding="utf-8")
     else:
         try:
-            strategy_source = inspect.getsource(strategy.generate_signals)
+            if strategy_kind == "external":
+                strategy_source = inspect.getsource(strategy.run_strategy)
+            else:
+                strategy_source = inspect.getsource(strategy.generate_signals)
         except (OSError, TypeError):
             strategy_source = None
 
@@ -415,6 +536,8 @@ def execute_run(
 
             report_path = generate_report(directory, overwrite=True)
         except Exception as exc:
+            # An archive without its promised report is not a completed run.
+            shutil.rmtree(directory, ignore_errors=True)
             raise run_errors.ReportFailedError(f"report generation failed: {exc}") from exc
 
     publish_info = None

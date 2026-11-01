@@ -271,6 +271,14 @@ def run_study(
 ) -> dict:
     """Execute a deterministic grid study sequentially. Returns the study dict."""
     strategy, strategy_path = run_backtest.resolve_strategy(request.strategy)
+    # v1: studies only cover engine-executed (signal) strategies. External
+    # strategy-owned runs are single-run only; grid re-execution of opaque
+    # strategy code is out of scope.
+    if getattr(strategy, "kind", "signal") == "external":
+        raise run_errors.InvalidOptimizationError(
+            "optimization studies support engine-executed strategies only; "
+            "strategy-owned runs are single-run only in v1"
+        )
     declared = strategy.parameters()
     combos = build_combinations(request, declared)
 

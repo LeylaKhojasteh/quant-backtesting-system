@@ -354,6 +354,12 @@ def run_walk_forward(
 ) -> dict:
     """Execute a deterministic walk-forward study sequentially. Returns the study."""
     strategy, strategy_path = run_backtest.resolve_strategy(request.strategy)
+    # v1: studies only cover engine-executed (signal) strategies.
+    if getattr(strategy, "kind", "signal") == "external":
+        raise run_errors.InvalidWalkForwardError(
+            "walk-forward studies support engine-executed strategies only; "
+            "strategy-owned runs are single-run only in v1"
+        )
     declared = strategy.parameters()
     folds, combos = build_study_plan(request, declared)
     candidate_count = len(combos)

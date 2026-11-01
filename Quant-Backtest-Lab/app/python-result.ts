@@ -3,7 +3,7 @@
  *
  * Converts an archived Python `result.json` (see `src/result_contract.py`)
  * into the canonical frontend `BacktestRun` payload shape (see `schema.ts`),
- * ready for `BacktestRunSchema` validation in `runner.ts`.
+ * ready for `BacktestRunSchema` validation at the adapter boundary.
  *
  * Conflict notes (handled here, nothing else touched):
  * - Python `run_id` values (`run_0001`) are not UUIDs, while the frontend
@@ -15,11 +15,10 @@
  * - Python timestamps are space-separated with microseconds
  *   (`2025-01-02 00:15:00Z`); the frontend requires ISO-8601 UTC with `T`.
  *   The adapter normalizes the separator and preserves the instant.
- * - Python `dataMode` does not exist; archived runs are real measured runs,
- *   so they map to `dataMode: 'live'` with `dataQuality.status: 'measured'`.
- *   Account terms stay absent (`accountReady: false`) — the Python engine
- *   produces price terms only, so account metrics render Pending, never
- *   invented.
+ * - Runs with archived validation are `measured`; legacy runs without validation
+ *   are `pending`, never silently upgraded.
+ *   Account terms stay absent (`accountReady: false`) unless the run carries
+ *   an account model, so account metrics render Pending, never invented.
  */
 
 export type PythonTrade = {
@@ -29,11 +28,12 @@ export type PythonTrade = {
   signal_available_time: string;
   entry_time: string;
   entry_price: number;
-  stop_loss: number;
-  take_profit: number;
+  stop_loss: number | null;
+  take_profit: number | null;
   exit_time: string;
   exit_price: number;
   exit_reason: string;
+  exit_reason_detail?: string | null;
   pnl_price: number;
   duration_seconds: number;
   spread_at_entry: number;
@@ -57,6 +57,17 @@ export type PythonResult = {
     parameters: Record<string, unknown>;
     data_source?: string;
     data_fingerprint?: string;
+    instrument?: {
+      symbol?: string;
+      asset_class?: string | null;
+      quote_currency?: string | null;
+      contract_size?: number | null;
+      tick_size?: number | null;
+      pip_size?: number | null;
+      digits?: number | null;
+      price_scale?: number | null;
+      session?: string | null;
+    } | null;
   };
   trades: PythonTrade[];
   equity: { timestamp: string; cumulative_pnl: number; balance?: number | null; equity?: number | null }[];
@@ -89,6 +100,8 @@ export type PythonResult = {
     signals_received?: number | null;
     signals_executed?: number | null;
     signals_ignored?: number | null;
+    /** engine | strategy. Absent on pre-1.1 archives: engine is assumed. */
+    execution_model?: string | null;
   };
   /** Optional account/economics report (src/accounting.py). Absent/null for
    *  price-term-only runs and for archives written before this field existed. */
@@ -153,8 +166,8 @@ export function validatePythonResult(payload: unknown): string[] {
     p.trades.forEach((t, i) => {
       const trade = t as Record<string, unknown>;
       if (trade.direction !== 'LONG' && trade.direction !== 'SHORT') errors.push(`trades[${i}].direction must be LONG or SHORT`);
-      if (!['TP', 'SL', 'EOD', 'END_OF_DATA'].includes(trade.exit_reason as string)) {
-        errors.push(`trades[${i}].exit_reason must be TP, SL, EOD or END_OF_DATA`);
+      if (!['TP', 'SL', 'EOD', 'END_OF_DATA', 'STRATEGY'].includes(trade.exit_reason as string)) {
+        errors.push(`trades[${i}].exit_reason must be TP, SL, EOD, STRATEGY or END_OF_DATA`);
       }
     });
   } else if ('trades' in p) {
@@ -206,7 +219,9 @@ export function pythonRunIdToUuid(runId: string): string {
   return `${b.slice(0, 8)}-${b.slice(8, 12)}-${b.slice(12, 16)}-${b.slice(16, 20)}-${b.slice(20, 32)}`;
 }
 
-const EXIT_MAP: Record<string, 'TP' | 'SL' | 'EOD'> = { TP: 'TP', SL: 'SL', EOD: 'EOD', END_OF_DATA: 'EOD' };
+const EXIT_MAP: Record<string, 'TP' | 'SL' | 'EOD' | 'STRATEGY'> = {
+  TP: 'TP', SL: 'SL', EOD: 'EOD', END_OF_DATA: 'EOD', STRATEGY: 'STRATEGY',
+};
 
 const ACCOUNT_UNAVAILABLE_REASONS = [
   'No account currency configured — price-term engine only.',
@@ -258,7 +273,10 @@ export function mapPythonResultToBacktestRun(payload: PythonResult): unknown {
     pnl: t.pnl_price,
     spreadIn: t.spread_at_entry,
     spreadOut: t.spread_at_exit,
+    mae: t.mae ?? null,
+    mfe: t.mfe ?? null,
     reason: EXIT_MAP[t.exit_reason],
+    reasonDetail: t.exit_reason_detail ?? null,
     ...(acctReady
       ? {
           volume: acct!.model?.position_size_lots,
@@ -296,18 +314,35 @@ export function mapPythonResultToBacktestRun(payload: PythonResult): unknown {
   const spreadsOut = ordered.map((t) => t.spread_at_exit);
 
   const inRangeTicks = payload.data_quality.tick_count ?? null;
+  const validation = payload.data_quality.validation ?? {};
+  const measured = Object.keys(validation).length > 0;
   const fingerprints = [payload.config.data_fingerprint, payload.run_id].filter(Boolean).join(':');
 
   return {
     runId,
     runTimestampUtc: pythonTimeToUtcIso(payload.created_at),
-    dataMode: 'live' as const,
     strategy: {
       name: payload.strategy.name,
       version: payload.strategy.version,
       parameters: payload.config.parameters,
     },
-    instrument: { symbol: payload.config.symbol, timeframe: payload.config.timeframe, timezone: 'UTC' },
+    instrument: {
+      symbol: payload.config.symbol,
+      timeframe: payload.config.timeframe,
+      timezone: 'UTC',
+      ...(payload.config.instrument
+        ? {
+            assetClass: payload.config.instrument.asset_class ?? null,
+            quoteCurrency: payload.config.instrument.quote_currency ?? null,
+            contractSize: payload.config.instrument.contract_size ?? null,
+            tickSize: payload.config.instrument.tick_size ?? null,
+            pipSize: payload.config.instrument.pip_size ?? null,
+            digits: payload.config.instrument.digits ?? null,
+            priceScale: payload.config.instrument.price_scale ?? null,
+            session: payload.config.instrument.session ?? null,
+          }
+        : {}),
+    },
     dateRange: {
       // Requested backtest window (authoritative for display). Legacy runs
       // without requested_* fall back to the observed coverage.
@@ -326,7 +361,7 @@ export function mapPythonResultToBacktestRun(payload: PythonResult): unknown {
       version: payload.strategy.version,
     },
     dataQuality: {
-      status: 'measured' as const,
+      status: measured ? 'measured' as const : 'pending' as const,
       modelingQuality: undefined,
       candles: payload.data_quality.candle_count ?? null,
       totalTicks: inRangeTicks,
@@ -368,6 +403,7 @@ export function mapPythonResultToBacktestRun(payload: PythonResult): unknown {
       engine: payload.execution.engine ?? null,
       startedAtUtc: payload.execution.started_at ?? null,
       finishedAtUtc: payload.execution.finished_at ?? null,
+      executionModel: payload.execution.execution_model ?? null,
     },
     metrics: {
       trades: m.total_trades,
@@ -418,7 +454,9 @@ export function mapPythonResultToBacktestRun(payload: PythonResult): unknown {
     ],
     limitations: [
       'PnL is in price terms only; no account currency, lot sizing, commission or conversion is applied.',
-      'MAE/MFE are not supplied by the engine result; excursion analytics stay unavailable.',
+      ...(ordered.some((t) => t.mae == null || t.mfe == null)
+        ? ['MAE/MFE are N/A for legacy archives that do not carry excursions.']
+        : []),
       ...(acctReady
         ? [
             'Account PnL = price PnL × contract size × lots, minus an explicit per-lot round-turn commission.',

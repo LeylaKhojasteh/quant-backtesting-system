@@ -1,12 +1,11 @@
 /**
  * Shared visualization types.
  *
- * These are neutral UI types used by both the real archived-run path and the
- * explicit `?fixture=demo` path. Market/execution data is never defined here —
- * only the shape the charts and inspector consume.
+ * These are neutral UI types used by the archived-run path. Market/execution
+ * data is never defined here — only the shape the charts and inspector consume.
  */
 
-/** A closed trade projected for charts/inspector (real run trades + fixture). */
+/** A closed trade projected for charts/inspector from an archived run. */
 export type Trade = {
   id: number;
   direction: 'LONG' | 'SHORT';
@@ -18,11 +17,16 @@ export type Trade = {
   entry: number;
   exit: number;
   pnl: number;
-  reason: 'SL' | 'TP' | 'EOD';
+  reason: 'SL' | 'TP' | 'EOD' | 'STRATEGY';
   spreadIn: number;
   spreadOut: number;
   sl: number;
   tp: number;
+  /** Engine-measured excursions (price terms): MAE <= 0, MFE >= 0. */
+  mae?: number | null;
+  mfe?: number | null;
+  /** Instrument decimal precision, when archived. */
+  digits?: number | null;
 };
 
 /** A real candle from the run's market context (BID OHLC for the chart body). */
