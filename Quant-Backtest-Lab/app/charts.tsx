@@ -2,9 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Minus, Plus, RotateCcw } from 'lucide-react';
-import { fmt, time } from './format';
+import { fmtPnl, fmtPrice, time } from './format';
 import type { Candle, TickPoint, Trade } from './types';
-import { excursions } from './analytics';
 import { useRun } from './run-context';
 import { INITIAL_CANDLE_WINDOW } from './run-market';
 import { formatUtcMs } from './utc';
@@ -142,7 +141,7 @@ export function CandleChart({
 }: {
   /** Real BID candles from the run's market context (never synthesized). */
   candles: Candle[];
-  /** Real trades of the loaded run (never the demo fixture). */
+  /** Real trades of the loaded archived run. */
   trades: Trade[];
   context?: boolean;
   trade?: Trade;
@@ -171,6 +170,7 @@ export function CandleChart({
   const [isDragging, setIsDragging] = useState(false);
   const dragStartRef = useRef<{ x: number; anchorTs: number } | null>(null);
   const { ref, width, height, ready } = useElementSize();
+  const digits = trade?.digits ?? null;
 
   const base: Candle[] = candles;
   const MIN_WINDOW = 6;
@@ -178,8 +178,8 @@ export function CandleChart({
   /** How close to a loaded edge triggers fetching the adjacent real window. */
   const EDGE_TRIGGER = 40;
 
-  // The series identity comes from the parent (archived run id / fixture); it
-  // is never inferred from the candles, so two runs that end at the same
+  // The series identity comes from the parent (archived run id); it is never
+  // inferred from the candles, so two runs that end at the same
   // timestamp stay distinct.
   const seriesKey = viewportKey;
   const at = useCallback(
@@ -303,7 +303,7 @@ export function CandleChart({
 
   const levels =
     trade && context
-      ? [trade.entry, trade.sl, trade.tp]
+      ? [trade.entry, ...(trade.sl != null ? [trade.sl] : []), ...(trade.tp != null ? [trade.tp] : [])]
       : overlay.includes('Trades')
         ? visibleTrades.flatMap((t) => [t.entry, t.exit])
         : [];
@@ -425,6 +425,9 @@ export function CandleChart({
         : kind === 'Entry'
           ? 'ENTRY'
           : reason === 'TP' ? 'TAKE PROFIT EXIT'
+          : reason === 'TSL' ? 'TRAILING STOP EXIT'
+          : reason === 'BE' ? 'BREAK-EVEN STOP EXIT'
+          : reason === 'TIME' ? 'TIME EXIT'
             : reason === 'SL' ? 'STOP LOSS EXIT'
               : 'END OF DATA EXIT';
     const eventNote =
@@ -433,11 +436,14 @@ export function CandleChart({
         : kind === 'Entry'
           ? 'Executed entry price and time.'
           : reason === 'TP' ? 'Closed because the take profit target was reached.'
-            : reason === 'SL' ? 'Closed because the stop loss level was reached.'
-              : 'Closed because backtest data ended while the position was open.';
+            : reason === 'TSL' ? 'Closed because the trailing stop level was reached.'
+              : reason === 'BE' ? 'Closed because the break-even stop level was reached.'
+              : reason === 'TIME' ? 'Closed because the maximum holding time was reached.'
+                : reason === 'SL' ? 'Closed because the stop loss level was reached.'
+                  : 'Closed because backtest data ended while the position was open.';
     const title =
       `${eventName}\nTrade #${owner.id}\n${owner.direction}\n` +
-      `${price === undefined ? 'Price n/a' : fmt(price)}\n${time(timestamp, true)}\n\n${eventNote}` +
+      `${price === undefined ? 'Price n/a' : fmtPrice(price, digits)}\n${time(timestamp, true)}\n\n${eventNote}` +
       (kind === 'Signal' ? '' : `\nExit reason: ${owner.reason}`);
 
     // Face of the tag nearest the candle: bottom edge when the tag sits above.
@@ -522,7 +528,7 @@ export function CandleChart({
         );
       }
       nodes.push(
-        marker(t, t.exitTime, `${t.reason === 'TP' ? 'TP' : t.reason === 'SL' ? 'SL' : 'EO'}${t.id}`, t.reason === 'TP' ? green : t.reason === 'SL' ? red : blue, false, 'Exit', t.reason),
+        marker(t, t.exitTime, `${t.reason === 'TP' ? 'TP' : t.reason === 'SL' || t.reason === 'TSL' ? 'SL' : t.reason === 'BE' ? 'BE' : t.reason === 'TIME' ? 'TM' : 'EO'}${t.id}`, t.reason === 'TP' ? green : t.reason === 'SL' || t.reason === 'TSL' ? red : blue, false, 'Exit', t.reason),
       );
     }
     return nodes;
@@ -629,7 +635,7 @@ export function CandleChart({
                 <g key={`grid${i}`}>
                   <line x1={pad.l} x2={pad.l + plotW} y1={gy} y2={gy} className="gridline" />
                   <text x={pad.l + plotW + 7} y={gy + 4} style={{ fontSize: 10 }}>
-                    {fmt(hi - (i * (hi - lo)) / 4)}
+                    {fmtPrice(hi - (i * (hi - lo)) / 4, digits)}
                   </text>
                 </g>
               );
@@ -654,7 +660,7 @@ export function CandleChart({
             ))}
 
             {context && trade &&
-              ([['Entry', trade.entry, blue], ['SL', trade.sl, red], ['TP', trade.tp, green]] as const).map(
+              ([['Entry', trade.entry, blue], ...(trade.sl != null ? [['SL', trade.sl, red] as const] : []), ...(trade.tp != null ? [['TP', trade.tp, green] as const] : [])] as const).map(
                 ([label, price, color]) => (
                   <g key={label}>
                     <line
@@ -666,7 +672,7 @@ export function CandleChart({
                       strokeDasharray="5 4"
                     />
                     <text x={pad.l + 5} y={y(price) - 5} style={{ fill: color, fontSize: 10 }}>
-                      {`${label} ${fmt(price)}`}
+                      {`${label} ${fmtPrice(price, digits)}`}
                     </text>
                   </g>
                 ),
@@ -693,7 +699,7 @@ export function CandleChart({
                   fill="var(--surface-elevated)"
                 />
                 <text x={pad.l + 12} y={pad.t + 21} style={{ fontSize: 11 }}>
-                  {`${time(hoverCandle.t).slice(0, 5)}  O ${fmt(hoverCandle.o)}  H ${fmt(hoverCandle.h)}  L ${fmt(hoverCandle.l)}  C ${fmt(hoverCandle.c)}`}
+                  {`${time(hoverCandle.t).slice(0, 5)}  O ${fmtPrice(hoverCandle.o, digits)}  H ${fmtPrice(hoverCandle.h, digits)}  L ${fmtPrice(hoverCandle.l, digits)}  C ${fmtPrice(hoverCandle.c, digits)}`}
                 </text>
               </g>
             )}
@@ -724,17 +730,16 @@ export function TickChart({
   ticks,
   view,
   status = 'ready',
-  excursionAvailable = false,
 }: {
   trade: Trade;
   /** Real BID/ASK ticks from the run's market context (never synthesized). */
   ticks: TickPoint[];
   view: string;
   status?: 'idle' | 'loading' | 'ready' | 'unavailable';
-  excursionAvailable?: boolean;
 }) {
   const [hover, setHover] = useState<number | null>(null);
   const { ref, width, height, ready } = useElementSize();
+  const digits = trade.digits;
 
   const full = view === 'Full Trade';
   const exit = view === 'Exit Window';
@@ -770,7 +775,9 @@ export function TickChart({
     );
   }
 
-  const levels = full || exit ? [trade.entry, trade.sl, trade.tp] : [trade.entry];
+  const levels = full || exit
+    ? [trade.entry, ...(trade.sl != null ? [trade.sl] : []), ...(trade.tp != null ? [trade.tp] : [])]
+    : [trade.entry];
   const lo = Math.min(...arr.map((a) => a.bid), ...levels) - 0.25;
   const hi = Math.max(...arr.map((a) => a.ask), ...levels) + 0.25;
 
@@ -801,7 +808,7 @@ export function TickChart({
                 <g key={`tg${i}`}>
                   <line x1={pad.l} x2={pad.l + plotW} y1={gy} y2={gy} className="gridline" />
                   <text x={pad.l + plotW + 7} y={gy + 4} style={{ fontSize: 10 }}>
-                    {fmt(hi - (i * (hi - lo)) / 3)}
+                    {fmtPrice(hi - (i * (hi - lo)) / 3, digits)}
                   </text>
                 </g>
               );
@@ -818,7 +825,7 @@ export function TickChart({
             ))}
 
             {([['Entry', trade.entry, blue], ...(exit || full
-              ? [['SL', trade.sl, red], ['TP', trade.tp, green]] as const
+              ? [...(trade.sl != null ? [['SL', trade.sl, red] as const] : []), ...(trade.tp != null ? [['TP', trade.tp, green] as const] : [])]
               : [])] as const).map(([label, price, color]) => (
               <g key={label}>
                 <line
@@ -830,7 +837,7 @@ export function TickChart({
                   strokeDasharray="4 4"
                 />
                 <text x={pad.l + 6} y={y(price) - 5} style={{ fill: color, fontSize: 10 }}>
-                  {`${label} ${fmt(price)}`}
+                  {`${label} ${fmtPrice(price, digits)}`}
                 </text>
               </g>
             ))}
@@ -861,29 +868,6 @@ export function TickChart({
               </>
             )}
 
-            {/* MAE / MFE come only from a seeded replay path; real runs do not
-                supply observed excursions yet, so nothing is drawn for them. */}
-            {full && excursionAvailable && (() => {
-              const ex = excursions(trade);
-              const idxOf = (ms: number) =>
-                Math.max(0, Math.min(arr.length - 1, Math.round(((ms - trade.entryTime) / Math.max(1, trade.exitTime - trade.entryTime)) * (arr.length - 1))));
-              const long = trade.direction === 'LONG';
-              const maePt = arr[idxOf(ex.maeTime)];
-              const mfePt = arr[idxOf(ex.mfeTime)];
-              const maeY = y(long ? maePt.bid : maePt.ask);
-              const mfeY = y(long ? mfePt.bid : mfePt.ask);
-              return (
-                <g>
-                  <line x1={x(idxOf(ex.maeTime))} x2={x(idxOf(ex.maeTime))} y1={pad.t} y2={pad.t + plotH} stroke={red} strokeDasharray="1 4" opacity=".7" />
-                  <circle cx={x(idxOf(ex.maeTime))} cy={maeY} r="4" fill="none" stroke={red} strokeWidth="1.6" />
-                  <text x={x(idxOf(ex.maeTime)) + 9} y={maeY + 12} style={{ fill: red, fontSize: 10 }}>MAE {fmt(ex.mae)}</text>
-                  <line x1={x(idxOf(ex.mfeTime))} x2={x(idxOf(ex.mfeTime))} y1={pad.t} y2={pad.t + plotH} stroke={green} strokeDasharray="1 4" opacity=".7" />
-                  <circle cx={x(idxOf(ex.mfeTime))} cy={mfeY} r="4" fill="none" stroke={green} strokeWidth="1.6" />
-                  <text x={x(idxOf(ex.mfeTime)) + 9} y={mfeY - 10} style={{ fill: green, fontSize: 10 }}>MFE {fmt(ex.mfe)}</text>
-                </g>
-              );
-            })()}
-
             {[0, 15, 30, 45, 60].map((n, i) => {
               const idx = Math.round((i * (arr.length - 1)) / 4);
               return (
@@ -912,7 +896,7 @@ export function TickChart({
                   fill="var(--surface-elevated)"
                 />
                 <text x={clamp(x(hover) - 168, pad.l + 7, pad.l + plotW - 343)} y={pad.t + 19} style={{ fontSize: 11 }}>
-                  {`${time(arr[hover].t)} BID ${fmt(arr[hover].bid)} ASK ${fmt(arr[hover].ask)}`}
+                  {`${time(arr[hover].t)} BID ${fmtPrice(arr[hover].bid, digits)} ASK ${fmtPrice(arr[hover].ask, digits)}`}
                 </text>
               </g>
             )}
@@ -922,11 +906,7 @@ export function TickChart({
       <div className="chart-foot">
         <span><i style={{ background: blue }} />BID</span>
         <span><i style={{ background: 'var(--warning)' }} />ASK</span>
-        <span className="chart-hint">
-          {full ? (excursionAvailable
-            ? 'Sampled replay · MAE / MFE derived from this path'
-            : 'MAE / MFE not supplied by this run') : 'Real cached ticks · UTC'}
-        </span>
+        <span className="chart-hint">Real cached ticks · UTC</span>
       </div>
     </div>
   );
@@ -1041,7 +1021,7 @@ export function Equity({ mode }: { mode: string }) {
             )}
 
             <path d={area} fill={accent} opacity=".09" />
-            <path d={path} stroke={accent} strokeWidth="1.8" fill="none" />
+            <path d={path} stroke={accent} strokeWidth="1.1" fill="none" />
 
             {primary.map((v, i) => {
               // Keep every data point (hit area + dot); only thin the X-axis
@@ -1058,7 +1038,9 @@ export function Equity({ mode }: { mode: string }) {
                     height={plotH}
                     fill="transparent"
                   />
-                  <circle cx={x(i)} cy={y(v)} r={hover === i ? 4.5 : 2.4} fill={accent} />
+                  {primary.length <= 250 && (
+                    <circle cx={x(i)} cy={y(v)} r={hover === i ? 4.5 : 2.4} fill={accent} />
+                  )}
                   {showLabel && (
                     <text x={x(i)} y={pad.t + plotH + 17} textAnchor="middle" style={{ fontSize: 10 }}>
                       {i + 1}
@@ -1072,10 +1054,10 @@ export function Equity({ mode }: { mode: string }) {
               <text x={pad.l} y={pad.t - 4} style={{ fontSize: 11 }}>
                 {`Trade ${hover + 1} · ${formatUtcMs(Date.parse(timestamps[hover]))} · ${
                   underwater
-                    ? `drawdown ${fmt(drawdown[hover])}`
+                    ? `drawdown ${fmtPnl(drawdown[hover])}`
                     : showBalance && balance
-                      ? `balance ${fmt(balance[hover])}`
-                      : `PnL ${fmt(pnl[hover])}`
+                      ? `balance ${fmtPnl(balance[hover])}`
+                      : `PnL ${fmtPnl(pnl[hover])}`
                 }`}
               </text>
             )}
@@ -1102,11 +1084,11 @@ export function Equity({ mode }: { mode: string }) {
         <span className="chart-hint">Trade #</span>
       </div>
       <dl className="equity-summary">
-        <div><dt>Cumulative Trade PnL</dt><dd>{fmt(pnl[pnl.length - 1] ?? 0)} <span className="meta">price terms</span></dd></div>
-        <div><dt>Closed-Trade Drawdown</dt><dd>{fmt(drawdown.length ? Math.max(...drawdown) : 0)} <span className="meta">price terms</span></dd></div>
+        <div><dt>Cumulative Trade PnL</dt><dd>{fmtPnl(pnl[pnl.length - 1] ?? 0)} <span className="meta">price terms</span></dd></div>
+        <div><dt>Closed-Trade Drawdown</dt><dd>{fmtPnl(drawdown.length ? Math.max(...drawdown) : 0)} <span className="meta">price terms</span></dd></div>
         <div>
           <dt>Realized Balance</dt>
-          <dd>{finalBalance !== null ? fmt(finalBalance) : 'Not available'}</dd>
+          <dd>{finalBalance !== null ? fmtPnl(finalBalance) : 'Not available'}</dd>
         </div>
         <div>
           <dt>Total Return</dt>

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, FileText, GitCompare, History, Loader2, Play, ExternalLink } from 'lucide-react';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { useBridge } from './bridge-status';
+import { DateField } from './date-field';
 import { useRunSource } from './run-context';
 import {
   BridgeError, getStudy, listDatasets, listRuns, listStrategies, listStudies, publishRun, runReportUrl,
@@ -42,7 +43,7 @@ export function OptimizationPanel({ onCompare }: { onCompare: (runIds: string[])
   const [datasets, setDatasets] = useState<DatasetInfo[]>([]);
   const [strategyId, setStrategyId] = useState('');
   const [datasetId, setDatasetId] = useState('');
-  const [symbol, setSymbol] = useState('XAUUSD');
+  const [symbol, setSymbol] = useState('');
   const [timeframe, setTimeframe] = useState('15min');
   const [start, setStart] = useState('');
   const [end, setEnd] = useState('');
@@ -243,9 +244,9 @@ export function OptimizationPanel({ onCompare }: { onCompare: (runIds: string[])
         <label>Timeframe<input value={timeframe} onChange={(e) => setTimeframe(e.target.value)} aria-label="Optimization timeframe" /></label>
         <label>
           Date Range <span className="meta">UTC</span>
-          <input type="date" value={start} onChange={(e) => setStart(e.target.value)} aria-label="Optimization start date" />
+          <DateField value={start} onChange={setStart} label="Optimization start date" />
           <span className="date-to">to</span>
-          <input type="date" value={end} onChange={(e) => setEnd(e.target.value)} aria-label="Optimization end date" />
+          <DateField value={end} onChange={setEnd} label="Optimization end date" />
         </label>
         <label>Base Stop<input type="number" step="any" value={baseStop} onChange={(e) => setBaseStop(e.target.value)} aria-label="Optimization base stop" /></label>
         <label>Base Take Profit<input type="number" step="any" value={baseTake} onChange={(e) => setBaseTake(e.target.value)} aria-label="Optimization base take" /></label>

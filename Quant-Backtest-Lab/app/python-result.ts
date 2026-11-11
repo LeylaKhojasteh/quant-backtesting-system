@@ -219,8 +219,8 @@ export function pythonRunIdToUuid(runId: string): string {
   return `${b.slice(0, 8)}-${b.slice(8, 12)}-${b.slice(12, 16)}-${b.slice(16, 20)}-${b.slice(20, 32)}`;
 }
 
-const EXIT_MAP: Record<string, 'TP' | 'SL' | 'EOD' | 'STRATEGY'> = {
-  TP: 'TP', SL: 'SL', EOD: 'EOD', END_OF_DATA: 'EOD', STRATEGY: 'STRATEGY',
+const EXIT_MAP: Record<string, 'TP' | 'SL' | 'TSL' | 'BE' | 'TIME' | 'EOD' | 'STRATEGY'> = {
+  TP: 'TP', SL: 'SL', TSL: 'TSL', BE: 'BE', TIME: 'TIME', EOD: 'EOD', END_OF_DATA: 'EOD', STRATEGY: 'STRATEGY',
 };
 
 const ACCOUNT_UNAVAILABLE_REASONS = [

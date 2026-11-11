@@ -10,14 +10,14 @@ test('archived runs are identified by run id, never by candle data', () => {
   assert.notEqual(viewportKey('run_a'), viewportKey('run_b'));
 });
 
-test('fixture/demo gets a stable, separate identity', () => {
-  assert.equal(viewportKey(null), 'fixture:demo');
-  assert.equal(viewportKey(undefined), 'fixture:demo');
+test('the empty state gets a stable, separate identity', () => {
+  assert.equal(viewportKey(null), 'no-run');
+  assert.equal(viewportKey(undefined), 'no-run');
   assert.notEqual(viewportKey(null), viewportKey('run_a'));
 });
 
 test('an optional scope (trade) re-initialises the viewport', () => {
   assert.equal(viewportKey('run_a', 7), viewportKey('run_a', 7));
   assert.notEqual(viewportKey('run_a', 7), viewportKey('run_a', 8));
-  assert.equal(viewportKey(null, 7), 'fixture:demo:7');
+  assert.equal(viewportKey(null, 7), 'no-run:7');
 });

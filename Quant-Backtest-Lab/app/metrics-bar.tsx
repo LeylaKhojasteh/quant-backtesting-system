@@ -2,7 +2,7 @@
 
 import { Info } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { fmt } from './format';
+import { fmt, fmtPnl } from './format';
 import { useRun } from './run-context';
 import { accountDrawdown } from './analytics';
 import { PendingMetric } from './pending-metric';
@@ -134,7 +134,7 @@ export function PerformanceMetricsBar({ aside }: { aside?: React.ReactNode }) {
 
   // Tier 1 — the headline outcome. These visually dominate.
   const primary: Metric[] = [
-    { label: 'Total PnL', value: fmt(p.netPnl), note: 'Net closed-trade PnL · price terms, not account currency.', tone: p.netPnl < 0 ? 'bad' : 'good' },
+    { label: 'Total PnL', value: fmtPnl(p.netPnl,run.instrument.digits), note: 'Net closed-trade PnL · price terms, not account currency.', tone: p.netPnl < 0 ? 'bad' : 'good' },
     { label: 'Total Trades', value: String(p.trades), note: 'Executed reference trades' },
     { label: 'Win Rate', value: `${(p.winRate ?? 0).toFixed(2)}%`, note: 'Winning closed trades divided by total closed trades.', sub: `${p.wins} wins / ${p.losses} losses` },
     { label: 'Profit Factor', value: p.profitFactor !== null && p.profitFactor !== undefined ? p.profitFactor.toFixed(2) : NOT_AVAILABLE, note: 'Gross profit / absolute gross loss · price terms' },
@@ -143,17 +143,17 @@ export function PerformanceMetricsBar({ aside }: { aside?: React.ReactNode }) {
 
   // Tier 2 — supporting metrics, denser and quieter.
   const detail: Metric[] = [
-    { label: 'Average PnL', value: fmt(p.avgPnl), note: 'Mean PnL per trade · price terms', tone: p.avgPnl < 0 ? 'bad' : 'good' },
-    { label: 'Expectancy', value: fmt(p.avgPnl), note: 'Average expected PnL per trade · price terms.', tone: p.avgPnl < 0 ? 'bad' : 'good' },
+    { label: 'Average PnL', value: fmtPnl(p.avgPnl,run.instrument.digits), note: 'Mean PnL per trade · price terms', tone: p.avgPnl < 0 ? 'bad' : 'good' },
+    { label: 'Expectancy', value: fmtPnl(p.avgPnl,run.instrument.digits), note: 'Average expected PnL per trade · price terms.', tone: p.avgPnl < 0 ? 'bad' : 'good' },
     { label: 'Recovery Factor', value: p.maxDrawdown ? fmt(p.netPnl / p.maxDrawdown) : NOT_AVAILABLE, note: 'Net price PnL divided by maximum closed-trade PnL drawdown · price terms', tone: p.netPnl < 0 ? 'bad' : 'good' },
     { label: 'Risk Reward', value: p.payoff !== null && p.payoff !== undefined ? p.payoff.toFixed(2) : NOT_AVAILABLE, note: 'Average win divided by average loss · price terms' },
     { label: 'Max Losing Streak', value: String(p.maxLosingStreak ?? 0), note: 'Longest run of consecutive losing trades', tone: 'bad' },
     { label: 'Volatility', value: volatility.toFixed(2), note: 'Standard deviation of per-trade PnL · price terms' },
     { label: 'Long / Short', value: `${longs} / ${shorts}`, note: 'Executed LONG and SHORT trades' },
-    { label: 'Average Win', value: fmt(p.avgWin), note: 'Mean PnL of winning trades · price terms', tone: 'good' },
-    { label: 'Average Loss', value: fmt(p.avgLoss), note: 'Mean PnL of losing trades · price terms', tone: 'bad' },
-    { label: 'Best Trade', value: fmt(Math.max(...pnls)), note: 'Largest single-trade PnL · price terms', tone: 'good' },
-    { label: 'Worst Trade', value: fmt(Math.min(...pnls)), note: 'Largest single-trade loss · price terms', tone: 'bad' },
+    { label: 'Average Win', value: fmtPnl(p.avgWin,run.instrument.digits), note: 'Mean PnL of winning trades · price terms', tone: 'good' },
+    { label: 'Average Loss', value: fmtPnl(p.avgLoss,run.instrument.digits), note: 'Mean PnL of losing trades · price terms', tone: 'bad' },
+    { label: 'Best Trade', value: fmtPnl(Math.max(...pnls),run.instrument.digits), note: 'Largest single-trade PnL · price terms', tone: 'good' },
+    { label: 'Worst Trade', value: fmtPnl(Math.min(...pnls),run.instrument.digits), note: 'Largest single-trade loss · price terms', tone: 'bad' },
     { label: 'Avg Duration', value: `${(p.avgDurationMin ?? 0).toFixed(0)} min`, note: 'Mean time in trade, entry to exit · UTC' },
     ...(accountReady
       ? [

@@ -18,6 +18,14 @@ const TONE_STYLE: Record<ReadinessTone, { color: string; dot: string }> = {
  */
 export function DataReadinessBar({ className = '' }: { className?: string }) {
   const state = useRun();
+  if (state.status === 'empty') {
+    return (
+      <section className={`readiness-bar ${className}`.trim()} aria-label="Data readiness" role="status">
+        <span className="readiness-title">Data readiness</span>
+        <span className="meta">No archived run selected — run a backtest to populate readiness.</span>
+      </section>
+    );
+  }
   if (state.status === 'error' || state.status === 'malformed') {
     const message = state.status === 'error' ? state.error : state.message;
     return (

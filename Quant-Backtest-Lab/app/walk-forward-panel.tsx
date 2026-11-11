@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, FileText, GitCompare, History, Loader2, Play, ExternalLink, TrendingUp } from 'lucide-react';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { useBridge } from './bridge-status';
+import { DateField } from './date-field';
 import { useRunSource } from './run-context';
 import {
   BridgeError, getWalkForward, listDatasets, listRuns, listStrategies, listStudies, listWalkForwards,
@@ -86,7 +87,7 @@ export function WalkForwardPanel({ onCompare }: { onCompare: (runIds: string[]) 
   const [datasets, setDatasets] = useState<DatasetInfo[]>([]);
   const [strategyId, setStrategyId] = useState('');
   const [datasetId, setDatasetId] = useState('');
-  const [symbol, setSymbol] = useState('XAUUSD');
+  const [symbol, setSymbol] = useState('');
   const [timeframe, setTimeframe] = useState('15min');
   const [start, setStart] = useState('');
   const [end, setEnd] = useState('');
@@ -313,9 +314,9 @@ export function WalkForwardPanel({ onCompare }: { onCompare: (runIds: string[]) 
         <label>Timeframe<input value={timeframe} onChange={(e) => setTimeframe(e.target.value)} aria-label="Walk-forward timeframe" /></label>
         <label>
           Overall Range <span className="meta">UTC</span>
-          <input type="date" value={start} onChange={(e) => setStart(e.target.value)} aria-label="Walk-forward start date" />
+          <DateField value={start} onChange={setStart} label="Walk-forward start date" />
           <span className="date-to">to</span>
-          <input type="date" value={end} onChange={(e) => setEnd(e.target.value)} aria-label="Walk-forward end date" />
+          <DateField value={end} onChange={setEnd} label="Walk-forward end date" />
         </label>
         <label>Base Stop<input type="number" step="any" value={baseStop} onChange={(e) => setBaseStop(e.target.value)} aria-label="Walk-forward base stop" /></label>
         <label>Base Take Profit<input type="number" step="any" value={baseTake} onChange={(e) => setBaseTake(e.target.value)} aria-label="Walk-forward base take" /></label>

@@ -85,6 +85,12 @@ export function RunLibrary() {
   }, []);
 
   useEffect(() => {
+    const openLibrary = () => setOpen(true);
+    window.addEventListener('qbl:open-library', openLibrary);
+    return () => window.removeEventListener('qbl:open-library', openLibrary);
+  }, []);
+
+  useEffect(() => {
     if (!open) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- external-system load; state lands after the await.
     loadRuns();
@@ -147,10 +153,10 @@ export function RunLibrary() {
 
   const confirmDeleteRun = (run: RunLibrarySummary) => runAction(run.run_id, async () => {
     await deleteRun(run.run_id);
+    const remaining = await refreshArchived();
     if (source.mode === 'archived' && source.runId === run.run_id) {
-      setSource({ mode: 'demo' });
+      setSource(remaining.length ? { mode: 'archived', runId: remaining[0].runId } : { mode: 'none' });
     }
-    await refreshArchived();
     await loadRuns();
     setConfirmId(null);
     setNotice(`Deleted ${run.run_id}`);
@@ -188,7 +194,7 @@ export function RunLibrary() {
           </Tabs>
 
           {!connected && (
-            <p className="lib-status lib-warn" role="status">Python Bridge Offline — the Run Library needs the bridge.</p>
+            <p className="lib-status lib-warn" role="status">{bridge.reason === 'network' ? 'Network disconnected — check your network.' : 'Python Bridge Offline — the Run Library needs the bridge.'}</p>
           )}
           {notice && <p className="lib-status lib-ok" role="status">{notice}</p>}
           {actionError && (
@@ -339,7 +345,6 @@ export function RunLibrary() {
                         </div>
                         <div className="lib-meta">
                           {isFile ? basename(entry.file ?? entry.id) : 'built-in alias'}
-                          {entry.description ? ` · ${entry.description}` : ''}
                         </div>
                         <div className="lib-stats">
                           <span>Parameters <b>{Object.keys(entry.parameters).length}</b></span>

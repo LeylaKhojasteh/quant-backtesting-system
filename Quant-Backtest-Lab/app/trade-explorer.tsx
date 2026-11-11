@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowUpDown, Search, X } from 'lucide-react';
-import { fmt, time } from './format';
+import { fmtPnl, fmtPrice, time } from './format';
 import { ExcursionValue } from './excursion';
 import type { EnrichedTrade } from './analytics';
 
@@ -17,9 +17,8 @@ const MAX_RENDERED = 80;
 
 const REASON_LABEL: Record<string, string> = { SL: 'Stop loss', TP: 'Take profit', EOD: 'End of data' };
 
-/** Truthful excursion explanations: the engine does not supply intratrade excursion data. */
-const MAE_NOTE = 'MAE (Maximum Adverse Excursion): unavailable because this run does not provide intratrade excursion data.';
-const MFE_NOTE = 'MFE (Maximum Favorable Excursion): unavailable because this run does not provide intratrade excursion data.';
+const MAE_NOTE = 'MAE (Maximum Adverse Excursion): worst unrealized move against the position (negative, price terms).';
+const MFE_NOTE = 'MFE (Maximum Favorable Excursion): best unrealized move in favor of the position (positive, price terms).';
 
 function pad3(n: number) {
   return String(n).padStart(3, '0');
@@ -70,7 +69,7 @@ export function TradeExplorer({
         t.direction.toLowerCase().includes(q) ||
         t.reason.toLowerCase().includes(q) ||
         REASON_LABEL[t.reason].toLowerCase().includes(q) ||
-        fmt(t.pnl).includes(q)
+        fmtPnl(t.pnl,t.digits).includes(q)
       );
     });
     const factor = sortDir === 'asc' ? 1 : -1;
@@ -120,7 +119,7 @@ export function TradeExplorer({
   );
 
   return (
-    <section className="trade-explorer panel" aria-label="Trade Explorer">
+    <section className="trade-explorer panel" aria-label="Trade Explorer" data-total-trades={rows.length}>
       <div className="panel-head">
         <h2>Trade Explorer</h2>
         <span className="meta">{filtered.length} / {rows.length}</span>
@@ -203,6 +202,7 @@ export function TradeExplorer({
                     className={'trade-row' + (selected ? ' selected' : '')}
                     onClick={() => onSelect(t.id)}
                     aria-current={selected}
+                    data-trade-id={t.id}
                     style={{ height: ROW_HEIGHT }}
                   >
                     <span className="trade-row-id">Trade #{pad3(t.id)}</span>
@@ -210,8 +210,8 @@ export function TradeExplorer({
                     <span className={'trade-row-reason ' + (t.reason === 'TP' ? 'good' : t.reason === 'SL' ? 'bad' : 'neutral')}>
                       {t.reason}
                     </span>
-                    <span className={'trade-row-pnl ' + (t.pnl > 0 ? 'good' : t.pnl < 0 ? 'bad' : '')}>{fmt(t.pnl)}</span>
-                    <span className="trade-row-meta">{time(t.entryTime)} UTC · <ExcursionValue kind="MAE" value={t.mae} /> · <ExcursionValue kind="MFE" value={t.mfe} /></span>
+                    <span className={'trade-row-pnl ' + (t.pnl > 0 ? 'good' : t.pnl < 0 ? 'bad' : '')}>{fmtPnl(t.pnl,t.digits)}</span>
+                    <span className="trade-row-meta">{time(t.entryTime)} UTC · @ {fmtPrice(t.entry,t.digits)} · <ExcursionValue kind="MAE" value={t.mae} digits={t.digits} /> · <ExcursionValue kind="MFE" value={t.mfe} digits={t.digits} /></span>
                   </button>
                 );
               })}

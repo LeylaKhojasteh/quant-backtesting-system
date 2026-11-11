@@ -10,6 +10,6 @@ export function viewportKey(
   runId: string | null | undefined,
   scope?: string | number | null,
 ): string {
-  const base = runId ? `run:${runId}` : 'fixture:demo';
+  const base = runId ? `run:${runId}` : 'no-run';
   return scope === undefined || scope === null || scope === '' ? base : `${base}:${String(scope)}`;
 }

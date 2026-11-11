@@ -1,11 +1,10 @@
 'use client';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { BacktestRunSchema, type BacktestRun } from './schema';
-import { loadBacktestRun } from './runner';
+import type { BacktestRun } from './schema';
 import { getActiveRunJob } from './bridge-client';
 import { listArchivedRuns, loadArchivedRun, type ArchivedRunRef } from '../adapters/python-result-adapter';
 
-export type RunSource = { mode: 'none' } | { mode: 'demo' } | { mode: 'archived'; runId: string };
+export type RunSource = { mode: 'none' } | { mode: 'archived'; runId: string };
 
 export type RunState =
   | { status: 'loading' }
@@ -20,32 +19,24 @@ const SourceContext = createContext<{
   setSource: (s: RunSource) => void;
   archived: ArchivedRunRef[];
   refreshArchived: () => Promise<ArchivedRunRef[]>;
-  /** True only when the app was opened with the explicit `?fixture=demo` test hook. */
-  fixture: boolean;
 }>({
   source: { mode: 'none' },
   setSource: () => {},
   archived: [],
   refreshArchived: async () => [],
-  fixture: false,
 });
 
 /**
  * Loads the single BacktestRun for the whole application.
  *
- * Product default is a REAL run: on open it selects the first archived run, or
- * shows a neutral empty state prompting a real backtest. The seeded fixture is
- * NOT a product mode; it is only mounted when the app is opened with the
- * explicit test hook `?fixture=demo` (used by deterministic tests).
- *
- * `archived` runs are mapped through the adapter boundary; the fixture is the
- * existing seeded reference kept for tests.
+ * On open it selects the newest archived real run, or shows a neutral empty
+ * state prompting a real backtest. Archived runs are mapped through the
+ * adapter boundary and validated there.
  */
 export function RunProvider({ children }: { children: ReactNode }) {
   const [source, setSource] = useState<RunSource>({ mode: 'none' });
   const [state, setState] = useState<RunState>({ status: 'loading' });
   const [archived, setArchived] = useState<ArchivedRunRef[]>([]);
-  const [fixture, setFixture] = useState(false);
 
   // Re-read the served manifest (no-store) so a just-published run appears
   // immediately, without a manual page refresh.
@@ -56,36 +47,38 @@ export function RunProvider({ children }: { children: ReactNode }) {
       const runs = await listArchivedRuns(noStore);
       setArchived(runs);
       return runs;
-    } catch {
-      setArchived([]);
-      return [];
+    } catch (err) {
+      // Keep the last known list and let the caller surface the failure.
+      throw err instanceof Error ? err : new Error('Failed to refresh archived runs.');
     }
   }, []);
 
   // Boot priority (authoritative, newest-first):
-  //   1. explicit test fixture (?fixture=demo)
-  //   2. active run job (reconnect handled by the job provider; the visible
+  //   1. active run job (reconnect handled by the job provider; the visible
   //      result stays untouched until the new run successfully completes)
-  //   3. newest successfully completed valid run = manifest head
+  //   2. newest successfully completed valid run = manifest head
   //      (listArchivedRuns is newest-first; deleted runs are already gone
   //      from the list; stopped/failed/incomplete jobs never enter it)
-  //   4. neutral empty state.
+  //   3. neutral empty state.
   // Persisted localStorage is NEVER authoritative for run selection: a stale
-  // stored run id must not override the newest successful run, and no fixed
-  // run_0001/demo baseline is ever restored.
+  // stored run id must not override the newest successful run.
   const booted = useRef(false);
   useEffect(() => {
     if (booted.current) return;
     booted.current = true;
     let alive = true;
     (async () => {
-      const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
-      const useFixture = params?.get('fixture') === 'demo';
-      const runs = await refreshArchived();
-      if (!alive) return;
-      if (useFixture) {
-        setFixture(true);
-        setSource({ mode: 'demo' });
+      let runs: ArchivedRunRef[];
+      try {
+        runs = await listArchivedRuns();
+        if (!alive) return;
+        setArchived(runs);
+      } catch (err) {
+        if (!alive) return;
+        setState({
+          status: 'error',
+          error: err instanceof Error ? err.message : 'Failed to load archived runs from the local server.',
+        });
         return;
       }
       // When a job is active, keep whatever result is currently loaded: the
@@ -132,30 +125,13 @@ export function RunProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- source switch must reset to loading before the async load resolves.
     setState({ status: 'loading' });
     (async () => {
-      if (source.mode === 'archived') {
-        const result = await loadArchivedRun(source.runId);
-        if (!alive) return;
-        if (!result.ok) {
-          setState({ status: 'error', error: result.error });
-          return;
-        }
-        setState({ status: 'ready', run: result.run, source });
-        return;
-      }
-      const result = await loadBacktestRun();
+      const result = await loadArchivedRun(source.runId);
       if (!alive) return;
       if (!result.ok) {
         setState({ status: 'error', error: result.error });
         return;
       }
-      // Validate again at the boundary so a hand-off payload
-      // that slipped past the adapter cannot reach the UI as real results.
-      const parsed = BacktestRunSchema.safeParse(result.run);
-      if (!parsed.success) {
-        setState({ status: 'malformed', message: parsed.error.message });
-        return;
-      }
-      setState({ status: 'ready', run: parsed.data, source });
+      setState({ status: 'ready', run: result.run, source });
     })();
     return () => {
       alive = false;
@@ -164,8 +140,8 @@ export function RunProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo(() => state, [state]);
   const sourceValue = useMemo(
-    () => ({ source, setSource, archived, refreshArchived, fixture }),
-    [source, archived, refreshArchived, fixture],
+    () => ({ source, setSource, archived, refreshArchived }),
+    [source, archived, refreshArchived],
   );
   return (
     <RunContext.Provider value={value}>

@@ -5,7 +5,7 @@
  * Fetches real candles/ticks from the bridge for the CURRENTLY LOADED archived
  * run. The run is authoritative: the frontend never invents dataset/symbol/
  * timeframe. On failure the caller renders an explicit unavailable state — there
- * is no demo fallback in this module.
+ * is no synthetic fallback in this module.
  */
 import { useEffect, useRef, useState } from 'react';
 import { getRunCandles, getRunTicks, type RunCandle, type RunTick } from './bridge-client';
@@ -40,7 +40,22 @@ export function toTicks(rows: readonly RunTick[]): TickPoint[] {
   return rows.map((t) => ({ t: Date.parse(t.timestamp), bid: t.bid, ask: t.ask, spread: t.spread }));
 }
 
-/** Small in-memory cache so re-selecting the same window does not refetch. */
+/**
+ * Small bounded in-memory cache so re-selecting the same window does not
+ * refetch. Capped so long sessions cannot grow it without bound; the oldest
+ * entry is evicted first. A cached empty array means the bridge answered but
+ * had no data (offline copy stays untouched — no refetch storm).
+ */
+const MAX_CACHE_ENTRIES = 30;
+function cachePut<K, V>(cache: Map<K, V>, key: K, value: V): void {
+  if (cache.has(key)) cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > MAX_CACHE_ENTRIES) {
+    const oldest = cache.keys().next();
+    if (oldest.done) break;
+    cache.delete(oldest.value);
+  }
+}
 const candleCache = new Map<string, Candle[]>();
 const tickCache = new Map<string, TickPoint[]>();
 
@@ -74,12 +89,12 @@ export function useRunCandles(
       .then((res) => {
         if (!alive || req !== reqRef.current) return;
         const mapped = toCandles(res.candles);
-        candleCache.set(key, mapped);
+        cachePut(candleCache, key, mapped);
         setFetched({ key, data: mapped });
       })
       .catch(() => {
         if (!alive || req !== reqRef.current) return;
-        candleCache.set(key, []);
+        cachePut(candleCache, key, []);
         setFetched({ key, data: [] });
       });
     return () => {
@@ -136,12 +151,12 @@ export function useRunTicks(
       .then((res) => {
         if (!alive || req !== reqRef.current) return;
         const mapped = toTicks(res.ticks);
-        tickCache.set(key, mapped);
+        cachePut(tickCache, key, mapped);
         setFetched({ key, data: mapped });
       })
       .catch(() => {
         if (!alive || req !== reqRef.current) return;
-        tickCache.set(key, []);
+        cachePut(tickCache, key, []);
         setFetched({ key, data: [] });
       });
     return () => {
@@ -201,7 +216,7 @@ export function mergeCandles(a: readonly Candle[], b: readonly Candle[]): Candle
  * - `loadMore('before'|'after')` fetches the adjacent real window through the
  *   existing run-scoped API, merges by timestamp, and evicts the far end so the
  *   buffer never exceeds {@link MAX_CANDLE_BUFFER} candles.
- * - Failures leave the current view untouched (no corruption, no demo data).
+ * - Failures leave the current view untouched (no corruption, no synthetic data).
  */
 export function useCandleWindow(
   runId: string | null,

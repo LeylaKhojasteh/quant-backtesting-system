@@ -1,72 +1,23 @@
-// Derived analytics over the seeded trade set.
-// Every value here is computed from `trades`; nothing is hard-coded.
-// MAE/MFE come from the seeded replay path (see demo.tradePath) and are labelled
-// as seeded in the UI until the Python engine supplies observed excursions.
-import { tradePath, trades } from './demo';
+// Derived analytics over an archived run's trades. Every value is computed
+// from the run payload; nothing is hard-coded or synthesized.
 import type { Trade } from './types';
 import type { BacktestRun } from './schema';
 
-/** Seeded excursion values (demo replay path). Always concrete numbers. */
-export type Excursion = { mae: number; mfe: number; maeTime: number; mfeTime: number };
-
 /**
- * Excursion fields on an enriched trade row. Archived engine runs that do not
- * supply observed excursions carry null here — never a synthesized value and
- * never a stand-in zero. Demo runs keep their seeded replay-path excursions.
+ * Excursion fields on an enriched trade row. MAE is signed (<= 0) and MFE is
+ * signed (>= 0), both in price terms on the exit side. Legacy archives that
+ * do not supply excursions carry null here and render N/A.
  */
 export type TradeExcursion = {
   mae: number | null;
   mfe: number | null;
-  maeTime: number | null;
-  mfeTime: number | null;
 };
 
 export type EnrichedTrade = Trade & TradeExcursion & { durationMin: number };
 
-/** Worst adverse and best favorable unrealized move while the trade was open. */
-export function excursions(t: Trade): Excursion {
-  const path = tradePath(t);
-  const long = t.direction === 'LONG';
-  let worst = 0;
-  let best = 0;
-  let worstAt = t.entryTime;
-  let bestAt = t.entryTime;
-  for (const p of path) {
-    // adverse side is the exit side: BID for LONG, ASK for SHORT
-    const adverseMove = long ? t.entry - p.bid : p.ask - t.entry;
-    const favorableMove = long ? p.bid - t.entry : t.entry - p.ask;
-    if (adverseMove > worst) {
-      worst = adverseMove;
-      worstAt = p.t;
-    }
-    if (favorableMove > best) {
-      best = favorableMove;
-      bestAt = p.t;
-    }
-  }
-  return { mae: round4(worst), mfe: round4(best), maeTime: worstAt, mfeTime: bestAt };
-}
-
-export function enrich(list: readonly Trade[]): EnrichedTrade[] {
-  return list.map((t) => ({
-    ...t,
-    ...excursions(t),
-    durationMin: (t.exitTime - t.entryTime) / 60000,
-  }));
-}
-
-/**
- * Rebuilds demo Trade records from a canonical BacktestRun's trades, so the
- * seeded replay path (MAE/MFE) and every derived statistic are computed from
- * the single run source instead of scattered fixtures.
- *
- * Excursion availability follows the run's data mode:
- * - seeded demo: the seeded replay path supplies excursions (unchanged).
- * - archived / live: the engine does not yet supply observed excursions, so
- *   MAE/MFE stay null and are rendered N/A. They are never synthesized.
- */
+/** Enriches archived trades from a canonical BacktestRun. */
 export function enrichRunTrades(run: BacktestRun): EnrichedTrade[] {
-  const ordered = run.trades
+  return run.trades
     .map((t) => ({
       id: t.id,
       direction: t.direction,
@@ -82,26 +33,16 @@ export function enrichRunTrades(run: BacktestRun): EnrichedTrade[] {
       reason: t.reason,
       spreadIn: t.spreadIn,
       spreadOut: t.spreadOut,
-      sl: t.sl ?? t.entry,
-      tp: t.tp ?? t.entry,
+      sl: t.sl ?? null,
+      tp: t.tp ?? null,
+      mae: t.mae ?? null,
+      mfe: t.mfe ?? null,
+      digits: run.instrument.digits ?? null,
+      durationMin: (Date.parse(t.exitTimeUtc) - Date.parse(t.entryTimeUtc)) / 60000,
     }))
     .sort((a, b) => a.exitTime - b.exitTime);
-
-  if (run.dataMode === 'seeded-demo') return enrich(ordered);
-
-  return ordered.map((t) => ({
-    ...t,
-    mae: null,
-    mfe: null,
-    maeTime: null,
-    mfeTime: null,
-    durationMin: (t.exitTime - t.entryTime) / 60000,
-  }));
 }
 
-function round4(n: number) {
-  return Math.round(n * 1e4) / 1e4;
-}
 function sum(v: readonly number[]) {
   return v.reduce((a, b) => a + b, 0);
 }
@@ -168,8 +109,8 @@ export function performance(list: readonly EnrichedTrade[]): PerformanceMetrics 
   };
 }
 
-/** Reference stop distance in price terms; one R unit. */
-export const R_UNIT = 5;
+/** Default R unit when a run does not expose its stopDistance parameter. */
+const DEFAULT_R_UNIT = 5;
 
 /** Total wall-clock span covered by the closed trades, in milliseconds. */
 export function tradingSpanMs(list: readonly EnrichedTrade[]) {
@@ -244,7 +185,7 @@ export type AdvancedPerformance = {
 };
 
 /**
- * Account-level performance. For the seeded price-term run every value is
+ * Account-level performance. For a price-term run every value is
  * null with an explicit reason: these statistics are not synthesised from a
  * fictional account.
  */
@@ -392,15 +333,21 @@ export type TradeQuality = {
   mfeCapturePct: number | null;
 };
 
-export function tradeQuality(list: readonly EnrichedTrade[]): TradeQuality {
+export function tradeQuality(
+  list: readonly EnrichedTrade[],
+  stopDistance: number = DEFAULT_R_UNIT,
+): TradeQuality {
+  const rUnit = Number.isFinite(stopDistance) && stopDistance > 0
+    ? stopDistance
+    : DEFAULT_R_UNIT;
   const maes = list.map((t) => t.mae).filter((v): v is number => v !== null);
   const mfes = list.map((t) => t.mfe).filter((v): v is number => v !== null);
   const withMfe = list.filter(
     (t): t is EnrichedTrade & { mfe: number } => t.mfe !== null && t.mfe > 0,
   );
   return {
-    expectancyR: mean(list.map((t) => t.pnl / R_UNIT)),
-    avgR: mean(list.map((t) => t.pnl / R_UNIT)),
+    expectancyR: mean(list.map((t) => t.pnl / rUnit)),
+    avgR: mean(list.map((t) => t.pnl / rUnit)),
     avgMAE: maes.length ? mean(maes) : null,
     avgMFE: mfes.length ? mean(mfes) : null,
     mfeCapturePct: withMfe.length
@@ -421,7 +368,7 @@ export type SignalAnalysis = {
 /**
  * Signal accounting from REAL backend metadata. `totalSignals` must come from
  * the run's archived `execution.signals_received`; it is never inferred from a
- * candle count, a trade count, or a fixture array. When it is unknown (null),
+ * candle count or a trade count. When it is unknown (null),
  * the derived rates stay null so the UI renders N/A instead of a fabricated
  * percentage.
  */
@@ -655,4 +602,3 @@ export function exitStats(list: readonly EnrichedTrade[]): ExitStat[] {
     .filter((r) => r.count > 0);
 }
 
-export const enriched: EnrichedTrade[] = enrich(trades);

@@ -1,6 +1,6 @@
 # Quant Backtest Lab — کد کامل نسخه تحویل‌شده
 
-این پروژه همان سورس رابط کاربری نسخه آنلاین است، به‌همراه حالت تمام‌صفحه برای Price Chart و Trade Debugger. ظاهر، تب‌ها، داده‌های دمو و تعامل‌های نسخه تحویل‌شده حفظ شده‌اند.
+این پروژه همان سورس رابط کاربری نسخه آنلاین است، به‌همراه حالت تمام‌صفحه برای Price Chart و Trade Debugger. منبع داده فقط آرشیو ران‌های واقعی موتور Python است؛ هیچ حالت دمو یا داده ساختگی وجود ندارد.
 
 ## معماری جدید (نسخه اصلاح‌شده)
 
@@ -8,16 +8,16 @@
 همهٔ گزارش‌ها، نمودارها و متریک‌ها از یک قرارداد `BacktestRun` واحد (Zod schema) تغذیه می‌شوند. UI هیچ‌گاه مستقیماً به `trades`، `cumulative` یا ثابت‌های پراکنده وابسته نیست.
 
 ### تفکیک واحدها
-- **Price terms**: PnL به واحدهای قیمت ابزار (تنها چیزی که دمو و موتور price-term تولید می‌کنند).
+- **Price terms**: PnL به واحدهای قیمت ابزار (خروجی موتور price-term).
 - **Account terms**: PnL به ارز حساب، نیازمند contract size، lot sizing، commission، swap، slippage و تبدیل FX.
 
-مقدارهای Account terms فقط وقتی `account.accountReady === true` موجودند. در حالت دمو همیشه `false` هستند، بنابراین Balance، Return٪، Sharpe، Sortino، Calmar، Annualized Return، Max Drawdown٪ و Modeling Quality به‌صورت **Pending / Not available** با علت دقیق نمایش داده می‌شوند.
+مقدارهای Account terms فقط وقتی `account.accountReady === true` موجودند. در ران‌های price-term همیشه `false` هستند، بنابراین Balance، Return٪، Sharpe، Sortino، Calmar، Annualized Return، Max Drawdown٪ و Modeling Quality به‌صورت **Pending / Not available** با علت دقیق نمایش داده می‌شوند.
 
 ### RunProvider
 `RunProvider` در `app/layout.tsx` مونت شده و `useRun()` را در اختیار کل برنامه می‌گذارد. وضعیت‌های ممکن: `loading` → `ready` / `error` / `malformed`.
 
 ### Adapter Boundary
-`loadBacktestRun()` در `app/runner.ts` تنها entry point است. Demo adapter پیاده‌سازی فعلی است. برای موتور Python آینده، `requestEngineRun()` boundary وجود دارد که الان به‌صورت صریح throw می‌کند تا حالت نیم‌ ferrous Fail-fast باشد.
+`loadArchivedRun()` در `adapters/python-result-adapter.ts` تنها entry point است: نتیجه `result.json` آرشیو Python را می‌خواند، با `mapPythonResultToBacktestRun()` به قرارداد `BacktestRun` تبدیل می‌کند و با Zod اعتبارسنجی می‌کند. اگر مانیفست یا ران در دسترس نباشد، UI حالت خالی یا خطای صریح نشان می‌دهد.
 
 ### زمان‌بندی
 تمام زمان‌ها UTC و ISO-8601 با `Z` هست. تبدیل `datetime-local` → UTC ISO در `app/utc.ts` متمرکز است و offsetهای `+00:00` رد می‌شوند.
@@ -58,45 +58,44 @@ pnpm start
 - `app/layout.tsx`: ریشه برنامه، مونت `RunProvider`.
 - `app/page.tsx`: پوسته برنامه، تنظیمات، نمودارها، لاگ معاملات و دیباگر.
 - `app/fullscreen-panel.tsx`: تمام‌صفحه با پشتیبانی از Esc و حفظ حالت نمودار.
-- `app/demo.ts`: داده‌های دمو، تنظیمات استراتژی و بررسی اجرای معاملات.
-- `app/schema.ts`: قرارداد `BacktestRun` با Zod (runId، strategy، instrument، dateRange، dataSource، dataQuality، account، trades، equity، metrics، warnings، limitations).
-- `app/runner.ts`: `loadBacktestRun()`، `buildDemoRun()`، `requestEngineRun()` boundary.
+- `app/schema.ts`: قرارداد `BacktestRun` با Zod (runId، strategy، instrument، dateRange، dataSource، dataQuality، account، trades، equity، metrics، warnings، limitations) و فیلدهای اختیاری MAE/MFE هر معامله.
+- `app/python-result.ts`: نگاشت `result.json` آرشیو Python به قرارداد `BacktestRun`.
 - `app/utc.ts`: تبدیل/اعتبارسنجی/فرمت UTC ISO-8601 (z-terminated).
 - `app/analytics.ts`: محاسبات derived (MAE/MFE، performance، risk، drawdown، annualisation gates، accountDrawdown).
-- `app/enrich.ts` (جدید): `enrichRunTrades(run)` برای بازسازی seeded replay از run واحد.
 - `app/run-context.tsx`: `RunProvider`، `useRun`، `useReadyRun`.
 - `app/report.tsx`: گزارش کامل و نمودارهای تحلیل (FullReport، Analytics).
 - `app/report-data.ts`: ۶۶ متریک گزارش، گروه‌بندی شده، Pending با دلیل.
 - `app/analytics-section.tsx`: بخش‌های تحقیقاتی (Equity، Distribution، Direction، Exit، PerformanceQuality، DrawdownQuality، SignalQuality، EntryQuality، ExitQualityTable، RunIdentity).
 - `app/charts.tsx`: CandleChart، TickChart، Equity (Cumulative PnL / Balance / Drawdown).
 - `app/metrics-bar.tsx`: متریک‌های دسته‌بندی‌شده (Performance / Risk / Trade Statistics).
-- `app/data-quality.tsx`: کیفیت داده از `run.dataQuality`، Demo labels.
+- `app/data-quality.tsx`: کیفیت داده اندازه‌گیری‌شده از `run.dataQuality`.
 - `app/globals.css`: رنگ‌ها، چیدمان، واکنش‌گرایی.
 - `components/ui`: اجزای تعاملی.
 - `public/favicon.svg`: آیکون اختصاصی.
 - `pnpm-lock.yaml`: نسخه‌های دقیق وابستگی‌ها.
-- `tests/`: تست‌های واحد (utc، analytics، runner) و اعتبارسنجی UI.
+- `tests/`: تست‌های واحد (utc، analytics، adapter) و اعتبارسنجی UI.
 - `scripts/test.mjs`: رانر تست با esbuild + node --test.
 
-## محدودیت‌های حالت Demo
+## محدودیت‌های مدل Account
 
-این نسخه یک پروتوتایپ فرانت‌اند با ۷ معامله دمو است. موارد زیر **نیست** داده واقعی و باید Pending بمانند:
+منبع داده فقط ران آرشیو‌شده موتور است. موارد زیر در ران‌های price-term باید Pending بمانند:
 
-| متریک / فیلد | وضعیت دمو | علت |
-|-------------|-----------|------|
+| متریک / فیلد | وضعیت | علت |
+|-------------|-------|------|
 | Balance | Not available | ارز حساب، موجودی اولیه، لات‌سایزینگ، PnL ارزی وجود ندارد |
 | Return % | Pending | نیاز به سری موجودی ارزی |
 | Max Drawdown % | Pending | نیاز به peak balance ارزی |
 | Sharpe / Sortino / Calmar | Pending | نیاز به سری بازده دوره‌ای ارزی |
 | Annualized Return | Pending | بازه نمونه < ۹۰ روز و < ۳۰ مشاهده |
 | Modeling Quality | Not measured | موتور اعتبارسنجی داده متصل نیست |
-| Total Ticks / Dukascopy filename | Seeded example | مقادیر иллюстраتیو، نه اندازه‌گیری شده |
 
-### رفتار دکمه‌ها در حالت دمو
-- کنترل‌ها فعال‌اند اما **Run Demo Replay** فقط بازپخش داده ۷ معامله مرجع است.
-- ورودی‌های استراتژی (Stop/Take) برای اتصال آینده stage می‌شوند؛ معامله‌های دمو ثابت می‌مانند.
-- اعتبارسنجی بازه زمانی با `validateUtcRange` (UTC، start < end) انجام می‌شود.
-- خروجی CSV شامل metadata: `dataMode=seeded-demo`، `runId`، `strategyVersion`، `parameter snapshot`، `timezone=UTC`، `pnlUnit=price-terms` و نام فایل شامل `demo` است.
+### رفتار بک‌تست واقعی
+- تنظیمات استراتژی از متادیتای همان استراتژی ساخته می‌شود و با `publish=true` به آرشیو و داشبورد می‌رود.
+- اگر instrument برای نماد pip size نداشته باشد (مثلاً کریپتو)، SL/TP به‌صورت **price units** وارد و ارسال می‌شود؛ account model همچنان به instrument metadata نیاز دارد.
+- metadata نمادها در `config/instruments.json` است و بدون تغییر کد قابل ویرایش/افزودن است. وضعیت complete/partial هر فایل ماهانه هم در `config/source_completeness.json` نگهداری می‌شود.
+- تاریخ‌ها به‌صورت `DD/MM/YYYY` نمایش داده می‌شوند و مقدار ISO برای API ارسال می‌شود.
+- MAE و MFE توسط موتور روی همان سمت خروج (BID برای LONG، ASK برای SHORT) و با لحاظ اسپرد محاسبه می‌شوند؛ MAE منفی و MFE مثبت است.
+- خروجی CSV شامل metadata: `runId`، `strategyVersion`، `parameter snapshot`، `timezone=UTC`، `pnlUnit=price-terms` و ستون‌های `mae`/`mfe` است.
 
 ### اصطلاحات اصلاح‌شده
 حذف شده: `MT5`، `MQL5`، `metatrader`، `OnTester`، `Strategy Tester Report`، `Field reference`.
@@ -126,8 +125,8 @@ pnpm start
 ### تست‌ها
 - `tests/utc.test.ts`: تبدیل/اعتبارسنجی UTC، رد offsetها.
 - `tests/analytics.test.ts`: annualisation gates، accountDrawdown، advancedPerformance، risk (sharpe=null، maxDrawdownPct=null).
-- `tests/runner.test.ts`: loadBacktestRun schema validation، requestEngineRun throw، equity ordering.
-- `tests/ui.test.mjs`: اعتبارسنجی سطح سورس — DEMO badge، عدم محاسبه موجودی ساختگی، عدم 99.12% واقعی، اصطلاحات ممنوعه، caption price terms، CSV metadata، Pending در گزارش.
+- `tests/adapter.test.ts`: نگاشت `result.json` آرشیو به `BacktestRun` و اعتبارسنجی Zod.
+- `tests/ui.test.mjs`: اعتبارسنجی سطح سورس — عدم وجود دمو، عدم محاسبه موجودی ساختگی، اصطلاحات ممنوعه، caption price terms، CSV metadata، Pending در گزارش.
 
 ## محتوای ZIP
 

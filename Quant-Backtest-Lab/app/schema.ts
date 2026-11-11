@@ -35,8 +35,9 @@ export const TradeSchema = z.object({
   /** Price terms only — entry/exit fills and raw PnL. Never account currency. */
   entry: z.number(),
   exit: z.number(),
-  sl: z.number().optional(),
-  tp: z.number().optional(),
+  /** Absent SL/TP stays null; never synthesize from entry price. */
+  sl: z.number().nullish(),
+  tp: z.number().nullish(),
   /** Per-trade price PnL (price terms). Always present for closed trades. */
   pnl: z.number(),
   spreadIn: z.number(),
@@ -54,7 +55,7 @@ export const TradeSchema = z.object({
   slippage: z.number().optional(),
   /** PnL converted to account currency, if and only if accountReady. */
   pnlCurrency: z.number().optional(),
-  reason: z.enum(['TP', 'SL', 'EOD', 'STRATEGY']),
+  reason: z.enum(['TP', 'SL', 'TSL', 'BE', 'TIME', 'EOD', 'STRATEGY']),
   /** Raw strategy-owned reason when reason === 'STRATEGY', else absent/null. */
   reasonDetail: z.string().nullish(),
 });

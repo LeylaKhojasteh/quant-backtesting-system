@@ -16,7 +16,7 @@ const TONE_STYLE: Record<TimelineTone, { color: string; label: string }> = {
 
 /**
  * Visual execution lifecycle for one trade, built only from that trade's own
- * data (BacktestRun trade or demo adapter record). Missing SL/TP renders as
+ * data (a BacktestRun trade). Missing SL/TP renders as
  * "Not supplied by run" — never invented. Timestamps are UTC ISO instants
  * rendered with a UTC tag; LONG/SHORT and TP/SL/EOD are text labels, never
  * colour alone. Events are keyboard-focusable buttons with an internal

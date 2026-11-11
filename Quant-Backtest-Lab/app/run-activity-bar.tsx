@@ -15,6 +15,27 @@ function formatElapsed(job: RunJob, now: number): string {
   return `${mm}:${ss}`;
 }
 
+/**
+ * Job events are system logs (bridge/worker wall-clock in UTC ISO). Render
+ * them in the viewer's LOCAL system time so they match the user's clock.
+ * Market/trade timestamps stay UTC elsewhere by contract — this helper is
+ * only for the run-activity log.
+ */
+function formatEventLocalTime(iso: string): string {
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return iso;
+  try {
+    return new Date(ms).toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    });
+  } catch {
+    return iso.slice(11, 19) || iso;
+  }
+}
+
 function heartbeatText(job: RunJob): { label: string; stale: boolean } {
   if (job.state === 'completed') return { label: 'Completed', stale: false };
   if (job.state === 'failed') return { label: 'Failed', stale: false };
@@ -34,7 +55,7 @@ function heartbeatText(job: RunJob): { label: string; stale: boolean } {
  * the bridge itself.
  */
 export function RunActivityBar({ onStop }: { onStop: () => void }) {
-  const { job } = useRunJob();
+  const { job, link } = useRunJob();
   const [now, setNow] = useState(() => Date.now());
   const [details, setDetails] = useState(false);
 
@@ -69,6 +90,11 @@ export function RunActivityBar({ onStop }: { onStop: () => void }) {
       <span className={`activity-heartbeat${hb.stale ? ' stale' : ''}`} title={job.heartbeat_at ? `Worker heartbeat ${job.heartbeat_at}` : 'Waiting for the first worker heartbeat'}>
         {hb.label}
       </span>
+      {link !== 'live' && (job.state === 'running' || job.state === 'queued' || stopping) && (
+        <span className="activity-heartbeat stale" role="status">
+          {link === 'offline' ? 'Network disconnected — check your network' : 'Reconnecting…'}
+        </span>
+      )}
       <button
         type="button"
         className="activity-details"
@@ -95,7 +121,9 @@ export function RunActivityBar({ onStop }: { onStop: () => void }) {
           {events.length === 0 && <li className="meta">No events yet.</li>}
           {events.map((e, i) => (
             <li key={`${e.t}-${i}`}>
-              <span className="meta">{e.t.slice(11, 19) || e.t}</span> {e.event}
+              <span className="meta" title={`${e.t} (UTC) — shown in your system time`}>
+                {formatEventLocalTime(e.t)} local
+              </span>{' '}{e.event}
             </li>
           ))}
         </ol>

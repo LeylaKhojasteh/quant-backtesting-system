@@ -19,18 +19,49 @@ const archivedPayload = JSON.parse(
 ) as PythonResult;
 
 describe('python-result.ts - archived result mapping', () => {
-  test('run_0001 maps to a schema-valid BacktestRun in live/measured mode', () => {
+  test('run_0001 maps to a schema-valid archived/measured BacktestRun', () => {
     assert.deepEqual(validatePythonResult(archivedPayload), []);
     const candidate = mapPythonResultToBacktestRun(archivedPayload);
     const parsed = BacktestRunSchema.safeParse(candidate);
     assert.ok(parsed.success, parsed.success ? '' : JSON.stringify(parsed.error.issues).slice(0, 500));
     if (!parsed.success) return;
-    assert.equal(parsed.data.dataMode, 'live');
     assert.equal(parsed.data.dataQuality.status, 'measured');
     assert.equal(parsed.data.account.accountReady, false);
     assert.equal(parsed.data.trades.length, 7);
     assert.equal(parsed.data.equity.length, 7);
     assert.equal(parsed.data.metrics.trades, 7);
+  });
+
+  test('nullable SL/TP and STRATEGY reason map to a schema-valid run', () => {
+    const exterior = {
+      ...archivedPayload.trades[0],
+      stop_loss: null,
+      take_profit: null,
+      exit_reason: 'STRATEGY',
+      exit_reason_detail: 'opposite_breakout',
+    };
+    const candidate = mapPythonResultToBacktestRun({ ...archivedPayload, trades: [exterior] }) as {
+      trades: { sl: number | null; tp: number | null; reason: string; reasonDetail: string | null }[];
+    };
+    const parsed = BacktestRunSchema.safeParse(candidate);
+    assert.ok(parsed.success, parsed.success ? '' : JSON.stringify(parsed.error.issues).slice(0, 500));
+    if (!parsed.success) return;
+    assert.equal(parsed.data.trades[0].sl, null);
+    assert.equal(parsed.data.trades[0].tp, null);
+    assert.equal(parsed.data.trades[0].reason, 'STRATEGY');
+    assert.equal(parsed.data.trades[0].reasonDetail, 'opposite_breakout');
+  });
+
+  test('legacy archive without validation is pending, not measured', () => {
+    const legacy: PythonResult = {
+      ...archivedPayload,
+      data_quality: { ...archivedPayload.data_quality, validation: undefined },
+    };
+    const candidate = mapPythonResultToBacktestRun(legacy);
+    const parsed = BacktestRunSchema.safeParse(candidate);
+    assert.ok(parsed.success);
+    if (!parsed.success) return;
+    assert.equal(parsed.data.dataQuality.status, 'pending');
   });
 
   test('mapped metrics and trades match the archive files exactly', () => {
@@ -112,7 +143,6 @@ describe('python-result-adapter.ts - archive boundary', () => {
     const result = await loadArchivedRun('run_0001', stubFetch);
     assert.ok(result.ok, result.ok ? '' : result.error);
     if (!result.ok) return;
-    assert.equal(result.run.dataMode, 'live');
     assert.equal(result.run.trades.length, 7);
   });
 

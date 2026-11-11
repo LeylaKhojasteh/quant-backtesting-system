@@ -1,69 +1,33 @@
 import { test, describe } from 'node:test';
 import { strict as assert } from 'node:assert';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { readinessItems } from '../app/readiness.js';
 import { tradeTimelineEvents } from '../app/timeline-events.js';
-import { loadBacktestRun } from '../app/runner.js';
+import { mapPythonResultToBacktestRun, type PythonResult } from '../app/python-result.js';
+import { BacktestRunSchema } from '../app/schema.js';
+
+const here = dirname(fileURLToPath(import.meta.url));
+const payload = JSON.parse(
+  readFileSync(join(here, '..', 'public', 'runs-run_0001-result.json'), 'utf-8'),
+) as PythonResult;
+const run = BacktestRunSchema.parse(mapPythonResultToBacktestRun(payload));
 
 describe('readiness.ts - DataReadiness derivation', () => {
-  test('demo run never shows Verified or ready-green status', async () => {
-    const result = await loadBacktestRun();
-    assert.ok(result.ok);
-    if (!result.ok) return;
-    const items = readinessItems(result.run);
+  test('archived measured price-term run is validated with Account Off', () => {
+    const items = readinessItems(run);
     assert.equal(items.length, 4);
     for (const item of items) {
       assert.ok(!/verified/i.test(item.status), `${item.label} must not say Verified`);
-      assert.notEqual(item.tone, 'ready', `${item.label} must not be ready-green in demo`);
-    }
-    const byKey = Object.fromEntries(items.map((i) => [i.key, i]));
-    assert.equal(byKey.source.status, 'Seeded demo');
-    assert.equal(byKey.validation.status, 'Not measured');
-    assert.equal(byKey.engine.status, 'Not available');
-    assert.equal(byKey.account.status, 'Not available');
-  });
-
-  test('every readiness item carries a ready-hint for tooltips', async () => {
-    const result = await loadBacktestRun();
-    assert.ok(result.ok);
-    if (!result.ok) return;
-    for (const item of readinessItems(result.run)) {
       assert.ok(item.readyHint.length > 0, `${item.label} needs a ready hint`);
       assert.ok(item.detail.length > 0, `${item.label} needs a detail`);
     }
-  });
-
-  test('live measured run with accountReady renders ready tones', async () => {
-    const result = await loadBacktestRun();
-    assert.ok(result.ok);
-    if (!result.ok) return;
-    const live = {
-      ...result.run,
-      dataMode: 'live' as const,
-      dataQuality: { ...result.run.dataQuality, status: 'measured' as const },
-      account: { ...result.run.account, accountReady: true, currency: 'USD' },
-    };
-    const items = readinessItems(live);
     const byKey = Object.fromEntries(items.map((i) => [i.key, i]));
-    assert.equal(byKey.validation.tone, 'ready');
-    assert.equal(byKey.account.tone, 'ready');
-    assert.equal(byKey.account.status, 'Ready');
-    assert.equal(byKey.engine.status, 'Validated');
-    assert.equal(byKey.engine.tone, 'ready');
+    assert.equal(byKey.source.status, 'Archived dataset');
     assert.equal(byKey.source.tone, 'ready');
-  });
-
-  test('live price-term run without account model stays validated, Account Off', async () => {
-    const result = await loadBacktestRun();
-    assert.ok(result.ok);
-    if (!result.ok) return;
-    const live = {
-      ...result.run,
-      dataMode: 'live' as const,
-      dataQuality: { ...result.run.dataQuality, status: 'measured' as const },
-      account: { ...result.run.account, accountReady: false },
-    };
-    const items = readinessItems(live);
-    const byKey = Object.fromEntries(items.map((i) => [i.key, i]));
+    assert.equal(byKey.validation.status, 'Measured');
+    assert.equal(byKey.validation.tone, 'ready');
     assert.equal(byKey.engine.status, 'Validated');
     assert.equal(byKey.engine.tone, 'ready');
     assert.equal(byKey.account.status, 'Off');
@@ -71,14 +35,21 @@ describe('readiness.ts - DataReadiness derivation', () => {
     assert.ok(!items.some((i) => i.key === 'reliability'), 'no Result reliability item');
     assert.ok(!items.some((i) => /Account model missing/.test(i.status)));
   });
+
+  test('accountReady run renders Account Ready', () => {
+    const withAccount = {
+      ...run,
+      account: { ...run.account, accountReady: true, currency: 'USD' },
+    };
+    const byKey = Object.fromEntries(readinessItems(withAccount).map((i) => [i.key, i]));
+    assert.equal(byKey.account.tone, 'ready');
+    assert.equal(byKey.account.status, 'Ready');
+  });
 });
 
 describe('timeline-events.ts - TradeTimeline derivation', () => {
-  test('demo trades produce the full 7-step lifecycle with UTC timestamps', async () => {
-    const result = await loadBacktestRun();
-    assert.ok(result.ok);
-    if (!result.ok) return;
-    for (const t of result.run.trades) {
+  test('archived trades produce the full 7-step lifecycle with UTC timestamps', () => {
+    for (const t of run.trades) {
       const trade = {
         id: t.id,
         direction: t.direction,
@@ -105,12 +76,9 @@ describe('timeline-events.ts - TradeTimeline derivation', () => {
     }
   });
 
-  test('TP / SL / EOD exits carry the matching tone and label', async () => {
-    const result = await loadBacktestRun();
-    assert.ok(result.ok);
-    if (!result.ok) return;
+  test('TP / SL / EOD exits carry the matching tone and label', () => {
     const seen = new Set<string>();
-    for (const t of result.run.trades) {
+    for (const t of run.trades) {
       seen.add(t.reason);
       const trade = {
         id: t.id,
@@ -127,11 +95,28 @@ describe('timeline-events.ts - TradeTimeline derivation', () => {
       const events = tradeTimelineEvents(trade);
       const trigger = events.find((e) => e.key === 'trigger');
       assert.ok(trigger);
-      const expected = t.reason === 'TP' ? 'tp' : t.reason === 'SL' ? 'sl' : 'eod';
+      const expected = t.reason === 'TP' ? 'tp' : t.reason === 'SL' || t.reason === 'TSL' ? 'sl' : 'eod';
       assert.equal(trigger.tone, expected);
       assert.ok(trigger.title.includes(t.reason));
     }
     assert.ok(seen.has('TP') && seen.has('SL') && seen.has('EOD'));
+
+    const tsl = tradeTimelineEvents({
+      id: 9001,
+      direction: 'LONG',
+      signal: Date.UTC(2025, 0, 31, 0, 0, 0),
+      entryTime: Date.UTC(2025, 0, 31, 0, 15, 0),
+      exitTime: Date.UTC(2025, 0, 31, 2, 0, 0),
+      entry: 2800,
+      exit: 2795,
+      sl: 2795,
+      tp: 2810,
+      reason: 'TSL',
+    });
+    const tslTrigger = tsl.find((e) => e.key === 'trigger');
+    assert.ok(tslTrigger);
+    assert.equal(tslTrigger.tone, 'sl');
+    assert.ok(tslTrigger.title.includes('TSL'));
   });
 
   test('missing SL/TP renders Not supplied by run instead of invented levels', () => {
@@ -150,13 +135,29 @@ describe('timeline-events.ts - TradeTimeline derivation', () => {
     assert.ok(sltp?.missing);
   });
 
-  test('no fabricated account balance or return is produced', async () => {
-    const result = await loadBacktestRun();
-    assert.ok(result.ok);
-    if (!result.ok) return;
-    assert.equal(result.run.metrics.returnPct, null);
-    assert.equal(result.run.metrics.annualizedReturnPct, null);
-    for (const p of result.run.equity) {
+  test('null SL/TP renders Not supplied by run instead of entry-price levels', () => {
+    const base = {
+      id: 2,
+      direction: 'SHORT' as const,
+      signal: Date.UTC(2025, 0, 31, 0, 0, 0),
+      entryTime: Date.UTC(2025, 0, 31, 0, 15, 0),
+      exitTime: Date.UTC(2025, 0, 31, 2, 0, 0),
+      entry: 2800,
+      exit: 2790,
+      sl: null,
+      tp: null,
+      reason: 'STRATEGY' as const,
+    };
+    const events = tradeTimelineEvents(base);
+    const sltp = events.find((e) => e.key === 'sltp');
+    assert.ok(sltp?.missing);
+    assert.ok(!sltp?.note.includes('2800'));
+  });
+
+  test('no fabricated account balance or return is produced', () => {
+    assert.equal(run.metrics.returnPct, null);
+    assert.equal(run.metrics.annualizedReturnPct, null);
+    for (const p of run.equity) {
       assert.equal(p.balance, undefined);
       assert.equal(p.pnlCurrency, undefined);
     }

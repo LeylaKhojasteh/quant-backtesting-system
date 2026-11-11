@@ -1,6 +1,24 @@
-/** Neutral display formatters shared by real-run and fixture views. */
+/** Neutral display formatters shared by run views. */
 export const fmt = (n: number) =>
   n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+/** Price levels adapt to the instrument's magnitude when metadata is absent. */
+export const fmtPrice = (n: number, instrumentDigits?: number | null) => {
+  const abs = Math.abs(n);
+  const digits = instrumentDigits != null && Number.isInteger(instrumentDigits) && instrumentDigits >= 0
+    ? instrumentDigits
+    : abs >= 1000 ? 2 : abs >= 100 ? 3 : abs >= 1 ? 4 : abs >= 0.01 ? 5 : 8;
+  return n.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+};
+
+/** Price-term PnL / excursions: metadata digits when known, else a safe heuristic. */
+export const fmtPnl = (n: number, instrumentDigits?: number | null) => {
+  const abs = Math.abs(n);
+  const digits = instrumentDigits != null && Number.isInteger(instrumentDigits) && instrumentDigits >= 0
+    ? instrumentDigits
+    : abs >= 1000 ? 2 : abs >= 1 ? 2 : abs >= 0.01 ? 4 : 6;
+  return n.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+};
 
 export const time = (n: number, full = false) =>
   new Date(n).toISOString().slice(full ? 0 : 11, 23).replace('T', ' ');

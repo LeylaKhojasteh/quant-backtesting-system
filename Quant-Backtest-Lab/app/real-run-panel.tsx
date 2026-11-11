@@ -4,7 +4,7 @@ import { AlertTriangle, Loader2, Play, RefreshCw, Upload, Settings2 } from 'luci
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { useBridge } from './bridge-status';
-import { DateField } from './date-field';
+
 import { useRunSource } from './run-context';
 import { useRunJob } from './run-job-context';
 import { useWorkspace } from './workspace-context';
@@ -53,6 +53,10 @@ export function RealRunPanel() {
 
   const [strategies, setStrategies] = useState<StrategyInfo[]>([]);
   const [datasets, setDatasets] = useState<DatasetInfo[]>([]);
+  // Two market modes: tick execution for FX/metals, candle execution for
+  // markets that only publish OHLC. The dataset itself decides the model.
+  const [marketMode, setMarketMode] = useState<'tick' | 'candle'>('tick');
+  const [spreadBps, setSpreadBps] = useState('2');
   const [catalogError, setCatalogError] = useState<string | null>(null);
 
   const [strategyId, setStrategyId] = useState('');
@@ -114,11 +118,16 @@ export function RealRunPanel() {
   const [importState, setImportState] = useState<'idle' | 'importing' | 'success'>('idle');
   const [importError, setImportError] = useState<string | null>(null);
   const [importedName, setImportedName] = useState<string | null>(null);
+  const [pendingOverwrite, setPendingOverwrite] = useState<{ filename: string; source: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const importInFlight = useRef(false);
 
   const strategy = strategies.find((s) => s.id === strategyId);
   const dataset = datasets.find((d) => d.dataset_id === datasetId);
+  const isCandleDataset = dataset?.data_type === 'candles';
+  const visibleDatasets = datasets.filter(
+    (d) => (d.data_type === 'candles') === (marketMode === 'candle'),
+  );
   const loadingCatalogs = connected && strategies.length === 0 && !catalogError;
 
   // Select one strategy id (falling back to candle_direction/first) and load
@@ -151,7 +160,13 @@ export function RealRunPanel() {
       );
       setCatalogError(null);
       applyStrategySelection(list, strategyIdRef.current || undefined);
-      const nextDataset = data.find((d) => d.complete_years?.length) ?? data[0];
+      // Prefer a tick dataset with complete years; fall back to the first one
+      // of either type so a candle-only install still selects something.
+      const nextDataset =
+        data.find((d) => d.data_type !== 'candles' && d.complete_years?.length) ??
+        data.find((d) => d.data_type !== 'candles') ??
+        data[0];
+      setMarketMode(nextDataset?.data_type === 'candles' ? 'candle' : 'tick');
       setDatasetId(nextDataset?.dataset_id ?? '');
       if (nextDataset) {
         setSymbol(nextDataset.symbol);
@@ -275,10 +290,24 @@ export function RealRunPanel() {
     setDatasetId(id);
     const chosen = datasets.find((d) => d.dataset_id === id);
     if (chosen) {
+      setMarketMode(chosen.data_type === 'candles' ? 'candle' : 'tick');
       setSymbol(chosen.symbol);
       setStart(chosen.default_start ?? '');
       setEnd(chosen.default_end ?? '');
       if (accountEnabled) applyInstrumentFor(chosen.symbol);
+    }
+  };
+
+  const switchMarketMode = (mode: 'tick' | 'candle') => {
+    setMarketMode(mode);
+    const next = datasets.find((d) => (d.data_type === 'candles') === (mode === 'candle'));
+    if (next) {
+      selectDataset(next.dataset_id);
+    } else {
+      // Nothing imported for this market yet: never keep the other market's
+      // dataset selected behind the toggle.
+      setDatasetId('');
+      setSymbol('');
     }
   };
 
@@ -292,12 +321,20 @@ export function RealRunPanel() {
       setImportedName(null);
       return;
     }
+    let source = '';
+    try {
+      source = await file.text();
+    } catch {
+      setImportState('idle');
+      setImportError('could not read file');
+      setImportedName(null);
+      return;
+    }
     importInFlight.current = true;
     setImportState('importing');
     setImportError(null);
     setImportedName(file.name);
     try {
-      const source = await file.text();
       const entry = await importStrategy({ filename: file.name, source });
       // Refresh the catalog (no browser reload) and select the new strategy;
       // the existing generic parameter form renders its declared parameters.
@@ -309,14 +346,36 @@ export function RealRunPanel() {
     } catch (err) {
       setImportState('idle');
       if (err instanceof BridgeError) {
-        setImportError(
-          err.code === 'strategy_conflict'
-            ? `Filename already exists — choose another. (${err.message})`
-            : `${err.code}: ${err.message}`,
-        );
+        if (err.code === 'strategy_conflict') {
+          // Same filename, new content: offer an explicit one-click update.
+          setImportError(null);
+          setPendingOverwrite({ filename: file.name, source });
+        } else {
+          setImportError(`${err.code}: ${err.message}`);
+        }
       } else {
         setImportError(err instanceof Error ? err.message : 'import failed');
       }
+    } finally {
+      importInFlight.current = false;
+    }
+  };
+
+  const confirmOverwrite = async () => {
+    if (!pendingOverwrite || importInFlight.current) return;
+    importInFlight.current = true;
+    setImportState('importing');
+    try {
+      const entry = await importStrategy({ ...pendingOverwrite, overwrite: true });
+      const list = await listStrategies();
+      setStrategies(list);
+      applyStrategySelection(list, entry.id);
+      setImportState('success');
+      setImportedName(`Updated ${entry.name} · v${entry.version}`);
+      setPendingOverwrite(null);
+    } catch (err) {
+      setImportState('idle');
+      setImportError(err instanceof BridgeError ? `${err.code}: ${err.message}` : err instanceof Error ? err.message : 'import failed');
     } finally {
       importInFlight.current = false;
     }
@@ -342,6 +401,11 @@ export function RealRunPanel() {
   const validate = (): string | null => {
     if (!strategy) return 'Select a strategy';
     if (!dataset) return 'Select a dataset';
+    // The market toggle only filters the list; the selected dataset must still
+    // belong to that market or the run would execute on the wrong model.
+    if ((dataset.data_type === 'candles') !== (marketMode === 'candle')) {
+      return 'Select a dataset for the chosen market';
+    }
     if (!symbol.trim()) return 'Select a dataset with a known symbol';
     if (timeframes.length > 0 && !timeframes.some((t) => t.value === timeframe)) {
       return 'Unsupported timeframe. Select one of the available timeframes.';
@@ -353,6 +417,12 @@ export function RealRunPanel() {
       const unit = pipSize ? 'pips' : 'price units';
       if (!Number.isFinite(stopN) || stopN <= 0) return `Stop Loss (${unit}) must be a positive number`;
       if (!Number.isFinite(takeN) || takeN <= 0) return `Take Profit (${unit}) must be a positive number`;
+    }
+    if (isCandleDataset) {
+      const bps = Number(spreadBps);
+      if (!Number.isFinite(bps) || bps < 0) {
+        return 'Spread (bps) must be zero or a positive number';
+      }
     }
     if (!start || !end) return 'Start and end dates are required';
     if (start > end) return 'Start date must be on or before the end date';
@@ -420,17 +490,23 @@ export function RealRunPanel() {
           start,
           end,
         },
-        execution: !riskEnabled || strategy.kind === 'external' || strategy.execution_model === 'strategy'
-          ? {}
-          : pipSize
-            ? {
-                stop_loss_pips: Number(stopPipsValue),
-                take_profit_pips: Number(takePipsValue),
-              }
-            : {
-                stop_distance: Number(stopPriceValue),
-                take_profit_distance: Number(takePriceValue),
-              },
+        execution: (() => {
+          const levels: Record<string, number> = {};
+          const strategyOwnsExecution =
+            strategy.kind === 'external' || strategy.execution_model === 'strategy';
+          if (riskEnabled && !strategyOwnsExecution) {
+            if (pipSize) {
+              levels.stop_loss_pips = Number(stopPipsValue);
+              levels.take_profit_pips = Number(takePipsValue);
+            } else {
+              levels.stop_distance = Number(stopPriceValue);
+              levels.take_profit_distance = Number(takePriceValue);
+            }
+          }
+          // Candle datasets have no measured spread; it is an explicit input.
+          if (isCandleDataset) levels.spread_bps = Number(spreadBps);
+          return levels;
+        })(),
         ...(accountEnabled
           ? {
               account: {
@@ -533,11 +609,23 @@ export function RealRunPanel() {
             accept=".py,text/x-python"
             className="rr-file"
             aria-label="Import strategy file"
+            title="Opens in the strategies folder — pick the .py file to import or update"
             onChange={onFilePicked}
           />
           {importError && (
             <p className="rr-error" role="alert">
               <AlertTriangle size={12} /> {importError}
+            </p>
+          )}
+          {pendingOverwrite && (
+            <p className="rr-warn" role="status">
+              {pendingOverwrite.filename} is already imported.{' '}
+              <button type="button" onClick={confirmOverwrite} disabled={importState === 'importing'}>
+                Update it in place
+              </button>{' '}
+              <button type="button" onClick={() => setPendingOverwrite(null)}>
+                Cancel
+              </button>
             </p>
           )}
           {importState === 'success' && importedName && (
@@ -558,20 +646,51 @@ export function RealRunPanel() {
         </button>
 
         <div className="rr-group-label">Market / Data</div>
+        <div className="rr-mode" role="group" aria-label="Market mode">
+          <button
+            type="button"
+            className={marketMode === 'tick' ? 'rr-mode-btn active' : 'rr-mode-btn'}
+            aria-pressed={marketMode === 'tick'}
+            onClick={() => switchMarketMode('tick')}
+          >
+            FX &amp; Metals
+          </button>
+          <button
+            type="button"
+            className={marketMode === 'candle' ? 'rr-mode-btn active' : 'rr-mode-btn'}
+            aria-pressed={marketMode === 'candle'}
+            onClick={() => switchMarketMode('candle')}
+          >
+            Crypto
+          </button>
+        </div>
         <label>
           Dataset
           <Select value={datasetId} onValueChange={selectDataset}>
             <SelectTrigger aria-label="Real run dataset">
-              <SelectValue placeholder={loadingCatalogs ? 'Loading…' : 'Select dataset'} />
+              <SelectValue
+                placeholder={
+                  loadingCatalogs
+                    ? 'Loading…'
+                    : visibleDatasets.length === 0
+                      ? 'No datasets imported for this market'
+                      : 'Select dataset'
+                }
+              />
             </SelectTrigger>
             <SelectContent>
-              {datasets.map((d) => (
+              {visibleDatasets.map((d) => (
                 <SelectItem key={d.dataset_id} value={d.dataset_id}>
                   {d.label}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
+          {isCandleDataset && (
+            <span className="rr-help">
+              Candle execution: fills use bar prices and the assumed spread.
+            </span>
+          )}
         </label>
         <label>
           Symbol <span className="meta">· from dataset</span>
@@ -588,10 +707,37 @@ export function RealRunPanel() {
         </label>
         <label>
           Date Range <span className="meta">UTC</span>
-          <DateField value={start} onChange={setStart} label="Run start date" />
+          <input
+            type="date"
+            value={start.slice(0, 10)}
+            min={dataset?.coverage_start?.slice(0, 10)}
+            max={(end || dataset?.coverage_end)?.slice(0, 10)}
+            onChange={(e) => setStart(e.target.value)}
+            aria-label="Run start date"
+          />
           <span className="date-to">to</span>
-          <DateField value={end} onChange={setEnd} label="Run end date" />
+          <input
+            type="date"
+            value={end.slice(0, 10)}
+            min={(start || dataset?.coverage_start)?.slice(0, 10)}
+            max={dataset?.coverage_end?.slice(0, 10)}
+            onChange={(e) => setEnd(e.target.value)}
+            aria-label="Run end date"
+          />
         </label>
+        {isCandleDataset && (
+          <label title="Full spread in basis points of the bar price. Buy pays ask, sell receives bid.">
+            Spread <span className="meta">bps · assumed, not measured</span>
+            <input
+              type="number"
+              step="any"
+              min="0"
+              value={spreadBps}
+              onChange={(e) => setSpreadBps(e.target.value)}
+              aria-label="Assumed spread in basis points"
+            />
+          </label>
+        )}
       </fieldset>
 
       {reuseWarning && (

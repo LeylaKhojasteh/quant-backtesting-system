@@ -2,6 +2,146 @@
   "version": 1,
   "runs": [
     {
+      "runId": "run_b66cb356",
+      "createdAt": "2026-11-01T21:15:59.128029Z",
+      "file": "runs/run_b66cb356/result.json",
+      "label": "run_b66cb356 · EMA 9/20 Cross 1.0 · XAUUSD 2025-01-01",
+      "description": "EMA 9/20 Cross on XAUUSD 4h archived run."
+    },
+    {
+      "runId": "run_f0a24180",
+      "createdAt": "2026-11-01T20:33:01.994527Z",
+      "file": "runs/run_f0a24180/result.json",
+      "label": "run_f0a24180 · EMA 9/20 Cross 1.0 · XAUUSD 2025-01-20",
+      "description": "EMA 9/20 Cross on XAUUSD 1min archived run."
+    },
+    {
+      "runId": "run_fd1a7c92",
+      "createdAt": "2026-11-01T20:10:50.187586Z",
+      "file": "runs/run_fd1a7c92/result.json",
+      "label": "run_fd1a7c92 · EMA 9/20 Cross 1.0 · XAUUSD 2025-01-20",
+      "description": "EMA 9/20 Cross on XAUUSD 30min archived run."
+    },
+    {
+      "runId": "run_7963fe72",
+      "createdAt": "2026-11-01T20:08:23.342511Z",
+      "file": "runs/run_7963fe72/result.json",
+      "label": "run_7963fe72 · EMA 9/20 Cross 1.0 · XAUUSD 2025-01-20",
+      "description": "EMA 9/20 Cross on XAUUSD 1h archived run."
+    },
+    {
+      "runId": "run_696578ce",
+      "createdAt": "2026-11-01T16:45:21.988636Z",
+      "file": "runs/run_696578ce/result.json",
+      "label": "run_696578ce · EMA 9/20 Cross 1.0 · XAUUSD 2025-01-20",
+      "description": "EMA 9/20 Cross on XAUUSD 30min archived run."
+    },
+    {
+      "runId": "run_1278aa17",
+      "createdAt": "2026-10-29T23:06:56.204217Z",
+      "file": "runs/run_1278aa17/result.json",
+      "label": "run_1278aa17 · Candle Direction 1.0 · XAUUSD 2025-01-10",
+      "description": "Candle Direction on XAUUSD 1h archived run."
+    },
+    {
+      "runId": "run_922d4df1",
+      "createdAt": "2026-10-29T19:46:55.591159Z",
+      "file": "runs/run_922d4df1/result.json",
+      "label": "run_922d4df1 · Candle Direction 1.0 · XAUUSD 2025-01-10",
+      "description": "Candle Direction on XAUUSD 1h archived run."
+    },
+    {
+      "runId": "run_23652cef",
+      "createdAt": "2026-10-29T09:01:32.554508Z",
+      "file": "runs/run_23652cef/result.json",
+      "label": "run_23652cef · Candle Direction 1.0 · XAUUSD 2025-01-10",
+      "description": "Candle Direction on XAUUSD 1h archived run."
+    },
+    {
+      "runId": "run_cab15f10",
+      "createdAt": "2026-10-28T18:27:03.769853Z",
+      "file": "runs/run_cab15f10/result.json",
+      "label": "run_cab15f10 · Candle Direction 1.0 · XAUUSD 2025-01-01",
+      "description": "Candle Direction on XAUUSD 4h archived run."
+    },
+    {
+      "runId": "run_c42e9e2a",
+      "createdAt": "2026-10-28T17:05:58.394801Z",
+      "file": "runs/run_c42e9e2a/result.json",
+      "label": "run_c42e9e2a · Candle Direction 1.0 · XAUUSD 2025-01-01",
+      "description": "Candle Direction on XAUUSD 4h archived run."
+    },
+    {
+      "runId": "run_5a5df073",
+      "createdAt": "2026-10-28T11:26:15.681838Z",
+      "file": "runs/run_5a5df073/result.json",
+      "label": "run_5a5df073 · Candle Direction 1.0 · XAUUSD 2025-01-01",
+      "description": "Candle Direction on XAUUSD 1h archived run."
+    },
+    {
+      "runId": "run_0f2f6d34",
+      "createdAt": "2026-10-28T11:17:57.704152Z",
+      "file": "runs/run_0f2f6d34/result.json",
+      "label": "run_0f2f6d34 · Candle Direction 1.0 · XAUUSD 2025-01-01",
+      "description": "Candle Direction on XAUUSD 1h archived run."
+    },
+    {
+      "runId": "run_c95f96a5",
+      "createdAt": "2026-10-27T18:06:41.278410Z",
+      "file": "runs/run_c95f96a5/result.json",
+      "label": "run_c95f96a5 · Candle Direction 1.0 · XAUUSD 2025-01-01",
+      "description": "Candle Direction on XAUUSD 4h archived run."
+    },
+    {
+      "runId": "run_b6c86e15",
+      "createdAt": "2026-10-27T17:10:47.859023Z",
+      "file": "runs/run_b6c86e15/result.json",
+      "label": "run_b6c86e15 · Candle Direction 1.0 · XAUUSD 2025-01-01",
+      "description": "Candle Direction on XAUUSD 4h archived run."
+    },
+    {
+      "runId": "run_b6bbae31",
+      "createdAt": "2026-10-22T20:56:23.681846Z",
+      "file": "runs/run_b6bbae31/result.json",
+      "label": "run_b6bbae31 · Candle Direction 1.0 · XAUUSD 2025-01-01",
+      "description": "Candle Direction on XAUUSD 15min archived run."
+    },
+    {
+      "runId": "run_e9ff7d3a",
+      "createdAt": "2026-10-21T20:13:21.181841Z",
+      "file": "runs/run_e9ff7d3a/result.json",
+      "label": "run_e9ff7d3a · Candle Direction 1.0 · XAUUSD 2025-12-04",
+      "description": "Candle Direction on XAUUSD 15min archived run."
+    },
+    {
+      "runId": "run_4a02c25f",
+      "createdAt": "2026-10-21T19:40:06.697541Z",
+      "file": "runs/run_4a02c25f/result.json",
+      "label": "run_4a02c25f · Candle Direction 1.0 · XAUUSD 2025-12-04",
+      "description": "Candle Direction on XAUUSD 15min archived run."
+    },
+    {
+      "runId": "run_1d109ba8",
+      "createdAt": "2026-10-21T16:36:56.123509Z",
+      "file": "runs/run_1d109ba8/result.json",
+      "label": "run_1d109ba8 · Candle Direction 1.0 · XAUUSD 2025-12-04",
+      "description": "Candle Direction on XAUUSD 15min archived run."
+    },
+    {
+      "runId": "run_d00d2145",
+      "createdAt": "2026-10-21T16:36:02.486674Z",
+      "file": "runs/run_d00d2145/result.json",
+      "label": "run_d00d2145 · Candle Direction 1.0 · XAUUSD 2025-12-04",
+      "description": "Candle Direction on XAUUSD 15min archived run."
+    },
+    {
+      "runId": "run_86ba51fd",
+      "createdAt": "2026-10-21T16:32:59.813677Z",
+      "file": "runs/run_86ba51fd/result.json",
+      "label": "run_86ba51fd · Candle Direction 1.0 · XAUUSD 2025-04-13",
+      "description": "Candle Direction on XAUUSD 15min archived run."
+    },
+    {
       "runId": "run_177ea705",
       "createdAt": "2026-10-17T16:13:18.287333Z",
       "file": "runs/run_177ea705/result.json",

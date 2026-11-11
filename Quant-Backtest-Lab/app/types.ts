@@ -17,11 +17,12 @@ export type Trade = {
   entry: number;
   exit: number;
   pnl: number;
-  reason: 'SL' | 'TP' | 'EOD' | 'STRATEGY';
+  reason: 'SL' | 'TP' | 'TSL' | 'BE' | 'TIME' | 'EOD' | 'STRATEGY';
   spreadIn: number;
   spreadOut: number;
-  sl: number;
-  tp: number;
+  /** Absent levels stay null; views must never fall back to entry price. */
+  sl: number | null;
+  tp: number | null;
   /** Engine-measured excursions (price terms): MAE <= 0, MFE >= 0. */
   mae?: number | null;
   mfe?: number | null;

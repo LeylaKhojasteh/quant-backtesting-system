@@ -16,6 +16,8 @@ export type JobOutcome =
   | { kind: 'failed'; job: RunJob; message: string }
   | { kind: 'stopped'; job: RunJob };
 
+export type JobLink = 'live' | 'reconnecting' | 'offline';
+
 export type RunJobValue = {
   /** The job the activity bar represents (null when idle). */
   job: RunJob | null;
@@ -31,6 +33,8 @@ export type RunJobValue = {
   /** Reconnect explicitly (used after browser reload races). */
   reconnect: () => Promise<RunJob | null>;
   bridgeAvailable: boolean;
+  /** Poll-link health: live, retrying after failures, or offline. */
+  link: JobLink;
 };
 
 const RunJobContext = createContext<RunJobValue>({
@@ -42,11 +46,33 @@ const RunJobContext = createContext<RunJobValue>({
   clearOutcome: () => {},
   reconnect: async () => null,
   bridgeAvailable: false,
+  link: 'live',
 });
 
 const ACTIVE_STATES = new Set(['queued', 'running', 'stopping']);
 const TERMINAL_STATES = new Set(['completed', 'failed', 'stopped']);
 const POLL_MS = 1000;
+
+/** Volatile per-poll fields (heartbeat age, elapsed) excluded from the render-stability signature. */
+function stableSnapshot(job: RunJob): string {
+  const last = job.events.length ? job.events[job.events.length - 1] : null;
+  return JSON.stringify([
+    job.job_id,
+    job.state,
+    job.stage,
+    job.stage_label,
+    job.run_id,
+    job.pid,
+    job.created_at,
+    job.started_at,
+    job.finished_at,
+    job.exit_code,
+    job.error,
+    job.heartbeat,
+    job.events.length,
+    last ? `${last.t}|${last.stage}|${last.event}` : '',
+  ]);
+}
 
 function outcomeOf(job: RunJob): JobOutcome | null {
   if (job.state === 'completed') return { kind: 'completed', job };
@@ -75,9 +101,12 @@ export function RunJobProvider({ children }: { children: ReactNode }) {
   const connected = bridge.status === 'connected';
   const [job, setJob] = useState<RunJob | null>(null);
   const [outcome, setOutcome] = useState<JobOutcome | null>(null);
+  const [link, setLink] = useState<JobLink>('live');
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const jobIdRef = useRef<string | null>(null);
   const seenTerminalRef = useRef<string | null>(null);
+  const failCountRef = useRef(0);
+  const lastStableRef = useRef('');
   // Last job this provider rendered, even after the tracked id is released.
   // Gives Stop a target when the id was released on terminal ingest.
   const lastJobRef = useRef<RunJob | null>(null);
@@ -102,12 +131,21 @@ export function RunJobProvider({ children }: { children: ReactNode }) {
     ingestRef.current = (next: RunJob | null) => {
       if (!next) {
         jobIdRef.current = null;
+        lastStableRef.current = '';
         setJob(null);
         stopPolling();
         return;
       }
       jobIdRef.current = next.job_id;
       lastJobRef.current = next;
+      failCountRef.current = 0;
+      setLink('live');
+      // Skip re-render when nothing stable changed: the worker heartbeat
+      // bumps volatile fields (heartbeat_at/age/elapsed) every second, but
+      // the visible bar only depends on state/stage/events.
+      const sig = stableSnapshot(next);
+      if (sig === lastStableRef.current && TERMINAL_STATES.has(next.state) === false) return;
+      lastStableRef.current = sig;
       setJob(next);
       if (TERMINAL_STATES.has(next.state)) {
         stopPolling();
@@ -126,12 +164,20 @@ export function RunJobProvider({ children }: { children: ReactNode }) {
         pollRef.current = setInterval(async () => {
           const id = jobIdRef.current;
           if (!id) return;
+          // Hidden tab: no tick work; resume on visibility.
+          if (typeof document !== 'undefined' && document.hidden) return;
           try {
             const fresh = await getRunJob(id);
             ingestRef.current(fresh);
           } catch {
             // Transient poll failure: keep the last known state; the next
             // tick retries. The worker runs independently of polling.
+            failCountRef.current += 1;
+            if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+              setLink('offline');
+            } else {
+              setLink('reconnecting');
+            }
           }
         }, POLL_MS);
       }
@@ -203,9 +249,22 @@ export function RunJobProvider({ children }: { children: ReactNode }) {
     }
     setOutcome(null);
     seenTerminalRef.current = null;
-    const created = await startRunJob(payload);
-    ingest(created);
-    return created;
+    setLink('live');
+    failCountRef.current = 0;
+    const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), 30000) : null;
+    try {
+      const created = await startRunJob(payload, undefined, ctrl?.signal);
+      ingest(created);
+      return created;
+    } catch (err) {
+      if (ctrl?.signal.aborted) {
+        throw new BridgeError('start request timed out — check your network, then retry', 'start_timeout', 408);
+      }
+      throw err;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }, [ingest]);
 
   const stop = useCallback(async () => {
@@ -223,6 +282,22 @@ export function RunJobProvider({ children }: { children: ReactNode }) {
 
   const clearOutcome = useCallback(() => setOutcome(null), []);
 
+  // Resume polling when the tab becomes visible again.
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const onVisible = () => {
+      if (document.hidden) return;
+      const id = jobIdRef.current;
+      if (!id) return;
+      getRunJob(id).then((fresh) => ingestRef.current(fresh)).catch(() => {
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) setLink('offline');
+        else setLink('reconnecting');
+      });
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, []);
+
   const value = useMemo<RunJobValue>(
     () => ({
       job,
@@ -233,8 +308,9 @@ export function RunJobProvider({ children }: { children: ReactNode }) {
       clearOutcome,
       reconnect,
       bridgeAvailable: connected,
+      link,
     }),
-    [job, start, stop, outcome, clearOutcome, reconnect, connected],
+    [job, start, stop, outcome, clearOutcome, reconnect, connected, link],
   );
   return <RunJobContext.Provider value={value}>{children}</RunJobContext.Provider>;
 }

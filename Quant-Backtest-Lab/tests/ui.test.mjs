@@ -38,10 +38,11 @@ describe('UI verification - demo mode requirements', () => {
     assert.ok(allFiles.size > 0);
   });
 
-test('DEMO badge exists in page.tsx', () => {
+test('ARCHIVED badge exists in page.tsx', () => {
     const page = allFiles.get(path.join(appDir, 'page.tsx')) || '';
-    assert.ok(page.includes('demo-badge'));
-    assert.ok(page.includes('DEMO'));
+    assert.ok(page.includes('run-badge'));
+    assert.ok(page.includes('ARCHIVED RUN'));
+    assert.ok(!page.includes('DEMO'));
   });
 
   test('No fabricated balance calculation (10000 + PnL) in app source', () => {
@@ -100,13 +101,15 @@ test('DEMO badge exists in page.tsx', () => {
     assert.ok(charts.includes('Price terms'));
   });
 
-  test('CSV export metadata matches the run source (no seeded-demo on real runs)', () => {
+  test('CSV export carries readable UTC metadata and excursions', () => {
     const page = allFiles.get(path.join(appDir, 'page.tsx')) || '';
-    // Real (archived) exports must not carry seeded/demo metadata.
-    assert.ok(page.includes("dataMode=${archived?'live':'seeded-demo'}"));
-    // The old buggy line hardcoded a second seeded-demo field for every export.
-    assert.ok(!page.includes('`dataMode=seeded-demo`,'));
+    assert.ok(page.includes('Quant Backtest Lab - Trade Export'));
+    assert.ok(page.includes('Archive Run ID'));
+    assert.ok(page.includes('Signal Time (UTC)'));
+    assert.ok(page.includes('MAE') && page.includes('MFE'));
     assert.ok(page.includes('.csv'));
+    assert.ok(!page.includes('seeded-demo'));
+    assert.ok(!page.includes('fixture-'));
   });
 
   test('Report data shows Pending for account-level metrics', () => {
@@ -135,14 +138,6 @@ test('DEMO badge exists in page.tsx', () => {
     assert.ok(page.includes("disabledOptions={runData?.account.accountReady?undefined:['Balance']}"), 'Balance must be disabled when unavailable');
   });
 
-  test('DataQualityPanel uses "Demo / not measured" and "Seeded example"', () => {
-    const dq = allFiles.get(path.join(appDir, 'data-quality.tsx')) || '';
-    assert.ok(dq.includes('Demo / not measured'));
-    assert.ok(dq.includes('seeded example'));
-    assert.ok(!dq.includes('99.12%'));
-    assert.ok(!dq.includes('Verified reference'));
-  });
-
   test('PerformanceQuality shows Not available with reasons for account metrics', () => {
     const as = allFiles.get(path.join(appDir, 'analytics-section.tsx')) || '';
     assert.ok(as.includes('Not available'));
@@ -163,15 +158,16 @@ test('DEMO badge exists in page.tsx', () => {
     assert.ok(reportData.includes('stopDistance'));
   });
 
-  test('DataReadiness bar is mounted and never Verified/ready-green in demo', () => {
+  test('DataReadiness bar is mounted and never says Verified', () => {
     const readiness = allFiles.get(path.join(appDir, 'data-readiness.tsx')) || '';
     const logic = allFiles.get(path.join(appDir, 'readiness.ts')) || readiness;
     assert.ok(readiness.includes('DataReadinessBar'));
     assert.ok(readiness.includes('useRun()'));
     assert.ok(!logic.includes("'Verified'") && !logic.includes('"Verified"'));
-    assert.ok(logic.includes('Seeded demo'));
-    assert.ok(logic.includes('Not measured'));
-    assert.ok(logic.includes('Not available'));
+    assert.ok(logic.includes('Archived dataset'));
+    assert.ok(logic.includes('Measured'));
+    assert.ok(logic.includes('Validated'));
+    assert.ok(!logic.includes('Seeded demo'));
     assert.ok(!logic.includes('Result reliability'), 'reliability row must be removed');
     const page = allFiles.get(path.join(appDir, 'page.tsx')) || '';
     assert.ok(page.includes('<DataReadinessBar'));
@@ -201,17 +197,58 @@ test('DEMO badge exists in page.tsx', () => {
     assert.ok(panel.includes('startJob') || panel.includes('startRunJob'), 'form starts async jobs');
   });
 
-  test('Demo replay is fixture-gated, not a product UI mode', () => {
+  test('Bridge and network are separate pills with connecting/disconnected states', () => {
+    const bridge = allFiles.get(path.join(appDir, 'bridge-status.tsx')) || '';
+    assert.ok(bridge.includes('Bridge: '), 'bridge pill labelled separately');
+    assert.ok(bridge.includes('Net: '), 'network pill labelled separately');
+    assert.ok(bridge.includes('check your network'), 'network outage names itself');
+    assert.ok(bridge.includes("'connecting'"), 'connecting state exists');
+    assert.ok(bridge.includes("'disconnected'"), 'disconnected state exists');
+    assert.ok(bridge.includes('online'), 'browser online/offline events tracked');
+    assert.ok(!bridge.includes("'unavailable'"), 'legacy unavailable state removed');
+    const panel = allFiles.get(path.join(appDir, 'real-run-panel.tsx')) || '';
+    assert.ok(panel.includes('check your network'), 'run panel distinguishes network outage');
+  });
+
+  test('Heavy derived data is memoized so per-second polls do not recompute it', () => {
     const page = allFiles.get(path.join(appDir, 'page.tsx')) || '';
-    assert.ok(!page.includes('Run Demo Replay'), 'Run Demo Replay must be removed from the product UI');
-    assert.ok(!page.includes('Demo Replay'), 'Demo Replay section must be removed from the product UI');
-    assert.ok(page.includes('fixtureMode&&'), 'the Demo source must be fixture-gated');
+    assert.ok(page.includes('useMemo'), 'page imports useMemo');
+    assert.ok(page.includes('const sourceTrades=useMemo('), 'trade mapping memoized');
+    assert.ok(page.includes('enrichRunTrades(runData):[],[runData]'), 'explorer rows memoized');
+    assert.ok(page.includes('explorerRows={explorerRows}'), 'inspector uses memoized rows');
+  });
+
+  test('Job polling skips unchanged frames, pauses in hidden tabs, and names link health', () => {
+    const ctx = allFiles.get(path.join(appDir, 'run-job-context.tsx')) || '';
+    assert.ok(ctx.includes('stableSnapshot'), 'unchanged polls skip re-render');
+    assert.ok(ctx.includes('document.hidden'), 'hidden tabs pause polling');
+    assert.ok(ctx.includes('visibilitychange'), 'poll resumes on visible');
+    assert.ok(ctx.includes("'reconnecting'"), 'reconnecting link state');
+    assert.ok(ctx.includes("'offline'"), 'offline link state');
+    const bar = allFiles.get(path.join(appDir, 'run-activity-bar.tsx')) || '';
+    assert.ok(bar.includes('Reconnecting'), 'activity bar shows reconnecting');
+    assert.ok(bar.includes('check your network'), 'activity bar shows offline copy');
+  });
+
+  test('Market caches are bounded and failed starts time out loudly', () => {
+    const market = allFiles.get(path.join(appDir, 'run-market.ts')) || '';
+    assert.ok(market.includes('MAX_CACHE_ENTRIES'), 'caches are capped');
+    assert.ok(market.includes('cachePut('), 'eviction helper used');
+    const ctx = allFiles.get(path.join(appDir, 'run-job-context.tsx')) || '';
+    assert.ok(ctx.includes('AbortController'), 'start has an abort guard');
+    assert.ok(ctx.includes('start_timeout'), 'start timeout names itself');
+  });
+
+  test('demo mode is gone and archived runs are the only source', () => {
+    const page = allFiles.get(path.join(appDir, 'page.tsx')) || '';
+    assert.ok(!page.includes('Demo Replay'), 'Demo Replay must be removed from the product UI');
+    assert.ok(!page.includes('fixtureMode'), 'no fixture gate may remain');
     assert.ok(page.includes('empty-state'), 'a real-use empty state must exist');
-    // the seeded fixture is retained for tests, but only via runner.ts
-    const runner = allFiles.get(path.join(appDir, 'runner.ts')) || '';
-    assert.ok(runner.includes('buildDemoRun'));
+    assert.ok(!allFiles.has(path.join(appDir, 'demo.ts')), 'demo.ts must be deleted');
+    assert.ok(!allFiles.has(path.join(appDir, 'runner.ts')), 'the demo runner must be deleted');
     const ctx = allFiles.get(path.join(appDir, 'run-context.tsx')) || '';
-    assert.ok(ctx.includes("get('fixture')"), 'fixture must be mounted only through the explicit test hook');
+    assert.ok(!ctx.includes("get('fixture')"), 'no fixture boot hook may remain');
+    assert.ok(ctx.includes("mode: 'archived'"), 'archived runs are the only source');
   });
 
   test('Pending metrics use the shared PendingMetric component, never fake numbers', () => {
@@ -331,27 +368,20 @@ describe('real market visualization (v1.0.2)', () => {
     const panel = file('real-run-panel.tsx');
     assert.ok(!panel.includes('Demo mode still works'), 'stale fallback copy removed');
     assert.ok(panel.includes('Python Bridge Offline'), 'honest offline state');
-    const quality = file('data-quality.tsx');
-    assert.ok(quality.includes('run.execution?.signalsReceived'), 'signals from engine metadata');
   });
 
-  test('normal real path does not source market data from demo.ts', () => {
-    // Real-run components must not import market/execution generators from demo.
-    for (const name of ['charts.tsx', 'analytics-section.tsx', 'report.tsx', 'report-data.ts', 'trade-explorer.tsx', 'trade-timeline.tsx', 'metrics-bar.tsx', 'excursion.tsx', 'event-ribbon.tsx']) {
-      const src = file(name);
-      assert.ok(!/from '\.\/demo'/.test(src), `${name} must not import demo.ts`);
+  test('no app source imports demo data or the deleted runner', () => {
+    for (const [file, src] of allFiles) {
+      assert.ok(!/from '\.\/demo'/.test(src), `${path.basename(file)} must not import demo.ts`);
+      assert.ok(!/from '\.\/runner'/.test(src), `${path.basename(file)} must not import runner.ts`);
+      assert.ok(!src.includes('seeded-demo'), `${path.basename(file)} must not reference seeded-demo`);
     }
-    // page.tsx may import the fixture only for the explicit ?fixture=demo path.
-    const page = file('page.tsx');
-    assert.ok(page.includes("from './strategy-definitions'"), 'neutral helpers moved out of demo');
-    assert.ok(page.includes('trades as demoTrades'), 'demo trades aliased as fixture-only');
   });
 
-  test('demo fixture stays isolated behind the explicit ?fixture=demo hook', () => {
-    const runner = file('runner.ts');
-    assert.ok(runner.includes('fixture') || runner.includes('seedTrades'), 'fixture builder retained');
-    const ctx = file('run-context.tsx');
-    assert.ok(ctx.includes("get('fixture')"), 'fixture gated by explicit test hook');
+  test('demo modules are deleted from the app', () => {
+    assert.ok(!allFiles.has(path.join(appDir, 'demo.ts')));
+    assert.ok(!allFiles.has(path.join(appDir, 'runner.ts')));
+    assert.ok(!allFiles.has(path.join(appDir, 'strategy-definitions.ts')));
   });
 });
 
@@ -434,8 +464,8 @@ describe('pip-based SL/TP (v1.0.3)', () => {
     const panel = file('real-run-panel.tsx');
     assert.ok(panel.includes('Stop Loss (pips)'), 'Stop Loss labelled in pips');
     assert.ok(panel.includes('Take Profit (pips)'), 'Take Profit labelled in pips');
-    assert.ok(panel.includes('stop_loss_pips: Number(stopPipsValue)'), 'sends stop_loss_pips');
-    assert.ok(panel.includes('take_profit_pips: Number(takePipsValue)'), 'sends take_profit_pips');
+    assert.match(panel, /stop_loss_pips[^\n]*Number\(stopPipsValue\)/, 'sends stop_loss_pips');
+    assert.match(panel, /take_profit_pips[^\n]*Number\(takePipsValue\)/, 'sends take_profit_pips');
     assert.ok(!/stop_distance: Number\(stop\)/.test(panel), 'no legacy price submit in the UI');
   });
 
@@ -448,15 +478,25 @@ describe('pip-based SL/TP (v1.0.3)', () => {
     assert.ok(!/XAUUSD.*0\.01|0\.01.*XAUUSD/.test(panel), 'no hardcoded XAUUSD pip logic');
   });
 
+  test('explicit instrument payload keeps full registry metadata', () => {
+    const panel = file('real-run-panel.tsx');
+    for (const field of ['asset_class', 'digits', 'price_scale', 'session', 'leverage', 'margin_rate', 'swap']) {
+      assert.ok(panel.includes(`${field}: instrumentSpec.${field}`), `explicit instrument must archive ${field}`);
+    }
+  });
+
   test('pip size is exposed on the instrument contract', () => {
     const client = file('bridge-client.ts');
     assert.ok(client.includes('pip_size: number | null'), 'InstrumentInfo.pip_size');
     assert.ok(client.includes('stop_loss_pips?: number'), 'request payload supports pip fields');
   });
 
-  test('unknown pip size is surfaced, not silently converted', () => {
+  test('unknown pip size falls back to explicit price units', () => {
     const panel = file('real-run-panel.tsx');
-    assert.ok(panel.includes('No pip size configured'), 'clear message when pip size is unknown');
+    assert.ok(panel.includes('Stop Loss (price units)'), 'price-unit label when pip size is unknown');
+    assert.ok(panel.includes('stop_distance') && panel.includes('take_profit_distance'),
+      'price distances are sent instead of pips');
+    assert.ok(!panel.includes('No pip size configured'), 'pip metadata is no longer a hard blocker');
   });
 });
 
@@ -507,8 +547,8 @@ describe('price chart interaction & windowing (v1.0.3)', () => {
     assert.ok(!charts.includes('base[base.length - 1].t'), 'no key derived from the last candle');
     assert.ok(!charts.includes('runKey'), 'the timestamp-derived runKey is gone');
     const view = file('price-chart-view.tsx');
-    assert.ok(view.includes('viewportKey(isArchived ? runId : null)'),
-      'archived run id is part of the key; fixture mode stays separate');
+    assert.ok(view.includes('viewportKey(runId)'),
+      'archived run id is part of the key');
     const page = file('page.tsx');
     assert.ok(page.includes('makeViewportKey(archivedRunId'),
       'inspector chart is keyed by the archived run id');

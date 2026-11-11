@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AreaChart, BarChart3, LineChart, PieChart, TrendingUp } from 'lucide-react';
-import { fmt } from './format';
+import { fmtPnl } from './format';
 import {
   advancedPerformance,
   directionStats,
@@ -211,7 +211,7 @@ export function DistributionAnalysis({ rows }: { rows: readonly EnrichedTrade[] 
             <div key={key} className="winloss-card">
               <span>{key === 'wins' ? 'Winning trades' : 'Losing trades'}</span>
               <strong className={key === 'wins' ? 'good' : 'bad'}>{rowsFor.length}</strong>
-              <small>{share.toFixed(2)}% of trades · total {fmt(total)}</small>
+              <small>{share.toFixed(2)}% of trades · total {fmtPnl(total)}</small>
               <div className="split-bar">
                 <i className={key === 'wins' ? 'good' : 'bad'} style={{ width: `${share}%` }} />
               </div>
@@ -241,9 +241,9 @@ export function DirectionAnalysis({ rows }: { rows: readonly EnrichedTrade[] }) 
               <td><span className={'tag ' + (s.direction === 'LONG' ? 'good' : 'bad')}>{s.direction}</span></td>
               <td>{s.trades}</td>
               <td>{s.winRate.toFixed(2)}%</td>
-              <td className={s.avgPnl >= 0 ? 'good' : 'bad'}>{fmt(s.avgPnl)}</td>
-              <td className={s.totalPnl >= 0 ? 'good' : 'bad'}>{fmt(s.totalPnl)}</td>
-              <td className={s.expectancy >= 0 ? 'good' : 'bad'}>{fmt(s.expectancy)}</td>
+              <td className={s.avgPnl >= 0 ? 'good' : 'bad'}>{fmtPnl(s.avgPnl)}</td>
+              <td className={s.totalPnl >= 0 ? 'good' : 'bad'}>{fmtPnl(s.totalPnl)}</td>
+              <td className={s.expectancy >= 0 ? 'good' : 'bad'}>{fmtPnl(s.expectancy)}</td>
               <td>{s.profitFactor.toFixed(2)}</td>
               <td>{s.maxLosingStreak}</td>
             </tr>
@@ -260,7 +260,7 @@ export function DirectionAnalysis({ rows }: { rows: readonly EnrichedTrade[] }) 
                 style={{ width: `${(Math.abs(s.totalPnl) / maxAbs) * 100}%` }}
               />
             </div>
-            <strong className={s.totalPnl >= 0 ? 'good' : 'bad'}>{fmt(s.totalPnl)}</strong>
+            <strong className={s.totalPnl >= 0 ? 'good' : 'bad'}>{fmtPnl(s.totalPnl)}</strong>
           </div>
         ))}
       </div>
@@ -271,7 +271,7 @@ export function DirectionAnalysis({ rows }: { rows: readonly EnrichedTrade[] }) 
 /** Exit-reason mix. */
 export function ExitAnalysis({ rows }: { rows: readonly EnrichedTrade[] }) {
   const stats = useMemo(() => exitStats(rows), [rows]);
-  const color = (reason: string) => (reason === 'TP' ? GREEN : reason === 'SL' ? RED : BLUE);
+  const color = (reason: string) => (reason === 'TP' ? GREEN : reason === 'SL' || reason === 'TSL' ? RED : BLUE);
   return (
     <div className="exit-analysis">
       {stats.map((s) => (
@@ -284,7 +284,7 @@ export function ExitAnalysis({ rows }: { rows: readonly EnrichedTrade[] }) {
             <i style={{ width: `${s.share}%`, background: color(s.reason) }} />
           </div>
           <strong>{s.share.toFixed(2)}%</strong>
-          <small>{s.count} trades · {fmt(s.totalPnl)}</small>
+          <small>{s.count} trades · {fmtPnl(s.totalPnl)}</small>
         </div>
       ))}
     </div>
@@ -300,7 +300,7 @@ export function RunIdentity() {
     <section className="run-identity panel">
       <div className="panel-head">
         <h2><TrendingUp size={16} />Run Identity</h2>
-        <span className="tag neutral">{run.dataMode === 'seeded-demo' ? 'Seeded demo' : 'Live'}</span>
+        <span className="tag neutral">Archived run</span>
       </div>
       <dl className="run-identity-grid">
         <div><dt>Strategy</dt><dd>{run.strategy.name} · {run.strategy.version}</dd></div>
@@ -365,14 +365,20 @@ const HOUR = (h: number) => `${String(h).padStart(2, '0')}:00`;
 const MINS = (m: number | null) => (m === null ? '—' : m >= 60 ? `${Math.floor(m / 60)}h ${Math.round(m % 60)}m` : `${m.toFixed(0)}m`);
 
 /** Return quality, downside risk, and capital efficiency in R units. */
-export function PerformanceQuality({ rows }: { rows: readonly EnrichedTrade[] }) {
+export function PerformanceQuality({
+  rows,
+  stopDistance = 5,
+}: {
+  rows: readonly EnrichedTrade[];
+  stopDistance?: number;
+}) {
   const a = useMemo(() => advancedPerformance(rows), [rows]);
-  const q = useMemo(() => tradeQuality(rows), [rows]);
+  const q = useMemo(() => tradeQuality(rows, stopDistance), [rows, stopDistance]);
   return (
     <div className="quality-sections">
       <StatGrid
         title="Return & Risk-Adjusted"
-        note="account terms · not available for seeded demo"
+        note="account terms · require an account model"
         items={[
           { label: 'Total Return', value: 'Not available', note: a.reasons.totalReturnPct ?? 'No account balance series.', pending: true, required: ['Account currency', 'Balance series in account currency'] },
           { label: 'Annualized Return', value: 'Not available', note: a.reasons.annualizedReturnPct ?? 'Sample span too short for annualisation.', pending: true, required: ['Account return series', '>= 90 days and >= 30 observations'] },
@@ -388,19 +394,19 @@ export function PerformanceQuality({ rows }: { rows: readonly EnrichedTrade[] })
           { label: 'Average R Multiple', value: `${q.avgR.toFixed(2)}R`, note: 'Mean realized PnL divided by one R (price terms)', tone: q.avgR < 0 ? 'bad' : 'good' },
           {
             label: 'Average MAE',
-            value: q.avgMAE === null ? 'N/A' : fmt(q.avgMAE),
+            value: q.avgMAE === null ? 'N/A' : fmtPnl(q.avgMAE),
             note: q.avgMAE === null
-              ? 'Not available — the engine run does not supply observed adverse excursions.'
-              : 'Mean worst adverse excursion while open · seeded replay path',
+              ? 'Not available — this archive does not contain MAE.'
+              : 'Mean worst adverse excursion while open · measured by the engine',
             pending: q.avgMAE === null,
             required: ['Observed MAE per trade from the engine'],
           },
           {
             label: 'Average MFE',
-            value: q.avgMFE === null ? 'N/A' : fmt(q.avgMFE),
+            value: q.avgMFE === null ? 'N/A' : fmtPnl(q.avgMFE),
             note: q.avgMFE === null
-              ? 'Not available — the engine run does not supply observed favorable excursions.'
-              : 'Mean best favorable excursion while open · seeded replay path',
+              ? 'Not available — this archive does not contain MFE.'
+              : 'Mean best favorable excursion while open · measured by the engine',
             pending: q.avgMFE === null,
             required: ['Observed MFE per trade from the engine'],
           },
@@ -453,7 +459,7 @@ export function DrawdownQuality({ rows }: { rows: readonly EnrichedTrade[] }) {
                   <td>{formatUtcMs(p.startTime)}</td>
                   <td>{formatUtcMs(p.troughTime)}</td>
                   <td>{p.recoveredTime ? formatUtcMs(p.recoveredTime) : 'Open'}</td>
-                  <td className="bad-text">{fmt(p.depth)}</td>
+                  <td className="bad-text">{fmtPnl(p.depth)}</td>
                   <td>{MINS(p.lengthMs / 60000)}</td>
                   <td>{MINS(p.recoveryMs === null ? null : p.recoveryMs / 60000)}</td>
                 </tr>
@@ -502,7 +508,7 @@ export function EntryQuality({ rows }: { rows: readonly EnrichedTrade[] }) {
         <>
           <div className="hour-bars">
             {hours.map((h) => (
-              <div className="hour-col" key={h.hour} title={`${HOUR(h.hour)} · ${h.trades} entries · ${h.wins} wins · ${fmt(h.totalPnl)}`}>
+              <div className="hour-col" key={h.hour} title={`${HOUR(h.hour)} · ${h.trades} entries · ${h.wins} wins · ${fmtPnl(h.totalPnl)}`}>
                 <div className="hour-track">
                   <i className={h.totalPnl >= 0 ? 'good' : 'bad'} style={{ height: `${(h.trades / max) * 100}%` }} />
                 </div>
@@ -521,7 +527,7 @@ export function EntryQuality({ rows }: { rows: readonly EnrichedTrade[] }) {
                   <td>{h.trades}</td>
                   <td>{h.wins}</td>
                   <td>{((h.wins / h.trades) * 100).toFixed(2)}%</td>
-                  <td className={h.totalPnl >= 0 ? 'good-text' : 'bad-text'}>{fmt(h.totalPnl)}</td>
+                  <td className={h.totalPnl >= 0 ? 'good-text' : 'bad-text'}>{fmtPnl(h.totalPnl)}</td>
                 </tr>
               ))}
             </tbody>
@@ -549,13 +555,13 @@ export function ExitQualityTable({ rows }: { rows: readonly EnrichedTrade[] }) {
         <tbody>
           {stats.map((s) => (
             <tr key={s.reason}>
-              <td><span className={'tag ' + (s.reason === 'TP' ? 'good' : s.reason === 'SL' ? 'bad' : 'neutral')}>{s.reason === 'EOD' ? 'END_OF_DATA' : s.reason}</span></td>
+              <td><span className={'tag ' + (s.reason === 'TP' ? 'good' : s.reason === 'SL' || s.reason === 'TSL' ? 'bad' : 'neutral')}>{s.reason === 'EOD' ? 'END_OF_DATA' : s.reason}</span></td>
               <td>{s.count}</td>
               <td>{((s.count / total) * 100).toFixed(2)}%</td>
               <td>{MINS(s.avgHoldMin)}</td>
-              <td className={s.totalPnl >= 0 ? 'good-text' : 'bad-text'}>{fmt(s.totalPnl)}</td>
+              <td className={s.totalPnl >= 0 ? 'good-text' : 'bad-text'}>{fmtPnl(s.totalPnl)}</td>
               <td className={s.efficient ? 'good-text' : 'bad-text'}>
-                {s.reason === 'TP' ? (s.efficient ? 'Target met' : 'Below target') : s.reason === 'SL' ? (s.efficient ? 'Capped at stop' : 'Beyond stop') : 'Data ended'}
+                {s.reason === 'TP' ? (s.efficient ? 'Target met' : 'Below target') : s.reason === 'SL' || s.reason === 'TSL' ? (s.efficient ? 'Capped at stop' : 'Beyond stop') : s.reason === 'BE' ? 'Break-even stop' : s.reason === 'TIME' ? 'Time exit' : 'Data ended'}
               </td>
             </tr>
           ))}
@@ -598,7 +604,7 @@ export function ResearchAnalytics({ group = 'all' }: { group?: string }) {
       {show('Performance') && (
         <div className="research-kpis">
           {[
-            ['Expectancy', fmt(p.expectancy), 'Average expected PnL per trade · price terms'],
+            ['Expectancy', fmtPnl(p.expectancy), 'Average expected PnL per trade · price terms'],
             ['Payoff ratio', p.payoff.toFixed(2), 'Average win divided by average loss · price terms'],
             ['Max losing streak', String(r.maxLosingStreak), 'Longest run of consecutive losing trades'],
             ['Recovery factor', r.recoveryFactor.toFixed(2), 'Net PnL divided by maximum closed-trade drawdown · price terms'],
@@ -617,7 +623,7 @@ export function ResearchAnalytics({ group = 'all' }: { group?: string }) {
         </Section>
       )}
       {show('Performance') && (
-        <Section icon={<BarChart3 size={16} />} title="Trade Distribution" note="seeded trade set">
+        <Section icon={<BarChart3 size={16} />} title="Trade Distribution" note="closed trades">
           <DistributionAnalysis rows={rows} />
         </Section>
       )}
@@ -633,7 +639,10 @@ export function ResearchAnalytics({ group = 'all' }: { group?: string }) {
       )}
       {show('Risk & Drawdown') && (
         <Section icon={<AreaChart size={16} />} title="Performance & Trade Quality" note="risk-adjusted returns · R multiples · excursions">
-          <PerformanceQuality rows={rows} />
+          <PerformanceQuality
+            rows={rows}
+            stopDistance={Number(run?.strategy.parameters.stopDistance) || 5}
+          />
         </Section>
       )}
       {show('Risk & Drawdown') && (

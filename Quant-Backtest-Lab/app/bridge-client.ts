@@ -53,6 +53,10 @@ export interface DatasetInfo {
   supported_timeframes: string[];
   prepared_timeframes: string[];
   tick_ready: boolean;
+  /** Candle datasets only: OHLC-only model, no ticks. */
+  candle_ready?: boolean;
+  base_timeframe?: string;
+  price_type?: string | null;
   default_start: string | null;
   default_end: string | null;
 }
@@ -429,6 +433,8 @@ export function runJobErrorText(error: RunJob['error']): string | null {
 export interface ImportStrategyPayload {
   filename: string;
   source: string;
+  /** True re-imports the same filename in place instead of conflicting. */
+  overwrite?: boolean;
 }
 
 /** Import one trusted local .py strategy; returns its catalog entry. */

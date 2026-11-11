@@ -37,7 +37,7 @@ function runs(pnls: number[]) {
 const dur = (v: number) => `${Math.floor(v / 60)}h ${Math.floor(v % 60)}m ${Math.round(v % 1 * 60)}s`;
 const count = (items: { pnl: number }[]) => `${items.length} (${items.length ? (items.filter((t) => t.pnl > 0).length / items.length * 100).toFixed(2) : '0.00'}% won)`;
 
-type TradeRow = { id: number; direction: 'LONG' | 'SHORT'; pnl: number; reason: 'TP' | 'SL' | 'EOD' | 'STRATEGY'; entryMs: number; exitMs: number; spreadIn: number; spreadOut: number };
+type TradeRow = { id: number; direction: 'LONG' | 'SHORT'; pnl: number; reason: 'TP' | 'SL' | 'TSL' | 'BE' | 'TIME' | 'EOD' | 'STRATEGY'; entryMs: number; exitMs: number; spreadIn: number; spreadOut: number };
 
 function rows(run: BacktestRun): TradeRow[] {
   return run.trades.map((t) => ({

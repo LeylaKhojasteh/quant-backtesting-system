@@ -6,7 +6,6 @@ import { FullscreenPanel } from './fullscreen-panel';
 import { useCandleWindow } from './run-market';
 import { viewportKey } from './viewport-key';
 import { useRunSource } from './run-context';
-import { candles as demoCandles } from './demo';
 import type { Trade } from './types';
 
 /**
@@ -27,8 +26,7 @@ export function PriceChartView({
   timeframe: string;
 }) {
   const { source } = useRunSource();
-  const isArchived = source.mode === 'archived';
-  const runId = isArchived ? source.runId : null;
+  const runId = source.mode === 'archived' ? source.runId : null;
 
   const [loaded, setLoaded] = useState(false);
   const [overlay, setOverlay] = useState('Signals + Trades');
@@ -38,8 +36,8 @@ export function PriceChartView({
 
   // No request while `loaded` is false (runId passed as null).
   const win = useCandleWindow(loaded ? runId : null);
-  const candles = isArchived ? win.candles : demoCandles;
-  const status = isArchived ? win.status : 'ready';
+  const candles = win.candles;
+  const status = win.status;
 
   const total = trades.length;
   const safeIndex = total ? Math.max(0, Math.min(index, total - 1)) : 0;
@@ -138,10 +136,10 @@ export function PriceChartView({
           overlay={overlay}
           centerTarget={centerTarget}
           onSelect={(i) => setIndex(i)}
-          onLoadMore={isArchived ? win.loadMore : undefined}
+          onLoadMore={win.loadMore}
           hasMoreBefore={win.hasBefore}
           hasMoreAfter={win.hasAfter}
-          viewportKey={viewportKey(isArchived ? runId : null)}
+          viewportKey={viewportKey(runId)}
         />
       </div>
       <PriceChartLegend overlay={overlay} />

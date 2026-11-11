@@ -18,11 +18,8 @@ export type ReadinessItem = {
 };
 
 /**
- * Derives the four readiness steps from a BacktestRun.
- * The demo run (dataMode seeded-demo, dataQuality demo, accountReady false)
- * never yields a `ready` tone and never uses the word `Verified`.
- * A future live run (dataMode live, dataQuality measured, accountReady true)
- * yields `ready` for the steps it satisfies.
+ * Derives the four readiness steps from an archived BacktestRun.
+ * A measured run yields `ready` for the steps it satisfies.
  *
  * Price-term runs report `Account: Off` (neutral) with a Validated run
  * result — a missing Account Model never implies unreliability.
@@ -45,27 +42,17 @@ export function readinessItems(run: BacktestRun | null | undefined): ReadinessIt
     ];
   }
 
-  const isLive = run.dataMode === 'live';
   const measured = run.dataQuality.status === 'measured';
   const accountReady = run.account.accountReady === true;
 
-  const source: ReadinessItem = isLive
-    ? {
-        key: 'source',
-        label: 'Data source',
-        status: 'Archived dataset',
-        tone: 'ready',
-        detail: run.dataSource.name,
-        readyHint: 'Dataset resolved from an archived real run.',
-      }
-    : {
-        key: 'source',
-        label: 'Data source',
-        status: 'Seeded demo',
-        tone: 'unavailable',
-        detail: run.dataSource.name,
-        readyHint: 'Connect a real data adapter (tick/candle file or live feed) to leave demo mode.',
-      };
+  const source: ReadinessItem = {
+    key: 'source',
+    label: 'Data source',
+    status: 'Archived dataset',
+    tone: 'ready',
+    detail: run.dataSource.name,
+    readyHint: 'Dataset resolved from an archived real run.',
+  };
 
   const validation: ReadinessItem = measured
     ? {
@@ -73,44 +60,26 @@ export function readinessItems(run: BacktestRun | null | undefined): ReadinessIt
         label: 'Data validation',
         status: 'Measured',
         tone: 'ready',
-        detail: 'Gaps, duplicates, coverage and modeling quality measured.',
+        detail: 'Tick/candle counts and basic tick checks measured; gap/duplicate/modeling validation is not attached.',
         readyHint: 'Validation engine output is attached to this run.',
       }
-    : run.dataQuality.status === 'pending'
-      ? {
-          key: 'validation',
-          label: 'Data validation',
-          status: 'Pending',
-          tone: 'pending',
-          detail: 'Validation has not run yet.',
-          readyHint: 'Attach the data-validation engine (gaps, duplicates, coverage, modeling quality).',
-        }
-      : {
-          key: 'validation',
-          label: 'Data validation',
-          status: 'Not measured',
-          tone: 'pending',
-          detail: 'Seeded example — no validation engine attached.',
-          readyHint: 'Attach the data-validation engine (gaps, duplicates, coverage, modeling quality).',
-        };
-
-  const engine: ReadinessItem = isLive
-    ? {
-        key: 'engine',
-        label: 'Run result',
-        status: 'Validated',
-        tone: 'ready',
-        detail: 'Produced by the verified Python tick engine (archived result).',
-        readyHint: 'Archived result validated against the engine contract.',
-      }
     : {
-        key: 'engine',
-        label: 'Run result',
-        status: 'Not available',
-        tone: 'unavailable',
-        detail: 'No archived engine result.',
-        readyHint: 'Run a real backtest to produce a validated result.',
+        key: 'validation',
+        label: 'Data validation',
+        status: 'Pending',
+        tone: 'pending',
+        detail: 'Validation has not run yet.',
+        readyHint: 'Attach the data-validation engine (gaps, duplicates, coverage, modeling quality).',
       };
+
+  const engine: ReadinessItem = {
+    key: 'engine',
+    label: 'Run result',
+    status: 'Validated',
+    tone: 'ready',
+    detail: 'Produced by the verified Python tick engine (archived result).',
+    readyHint: 'Archived result validated against the engine contract.',
+  };
 
   // A missing Account Model never makes a price-term run unreliable: price
   // terms are the validated result. "Off" is a neutral mode, not a warning.
@@ -123,23 +92,14 @@ export function readinessItems(run: BacktestRun | null | undefined): ReadinessIt
         detail: `Account model applied${run.account.currency ? ` · ${run.account.currency}` : ''}.`,
         readyHint: 'Account model is configured.',
       }
-    : isLive
-      ? {
-          key: 'account',
-          label: 'Account',
-          status: 'Off',
-          tone: 'unavailable',
-          detail: 'Price-term results are available. Enable Account Model for account-currency PnL, balance and return.',
-          readyHint: 'Price-term results are available. Enable Account Model for account-currency PnL, balance and return.',
-        }
-      : {
-          key: 'account',
-          label: 'Account',
-          status: 'Not available',
-          tone: 'unavailable',
-          detail: run.account.note ?? 'No account-currency model configured.',
-          readyHint: 'Run a real backtest to produce a validated result.',
-        };
+    : {
+        key: 'account',
+        label: 'Account',
+        status: 'Off',
+        tone: 'unavailable',
+        detail: 'Price-term results are available. Enable Account Model for account-currency PnL, balance and return.',
+        readyHint: 'Price-term results are available. Enable Account Model for account-currency PnL, balance and return.',
+      };
 
   return [source, validation, engine, account];
 }

@@ -23,9 +23,10 @@ export type TimelineTrade = {
   exitTime: number;
   entry: number;
   exit: number;
-  sl?: number;
-  tp?: number;
-  reason: 'TP' | 'SL' | 'EOD' | 'STRATEGY';
+  /** Absent SL/TP stays null; never synthesize from entry price. */
+  sl?: number | null;
+  tp?: number | null;
+  reason: 'TP' | 'SL' | 'TSL' | 'BE' | 'TIME' | 'EOD' | 'STRATEGY';
 };
 
 export type TimelineEvent = {
@@ -45,7 +46,7 @@ export type TimelineEvent = {
 const utc = (ms: number) => formatUtcMs(ms, { withDate: true, withSeconds: true });
 
 function exitTone(reason: TimelineTrade['reason']): TimelineTone {
-  return reason === 'TP' ? 'tp' : reason === 'SL' ? 'sl' : 'eod';
+  return reason === 'TP' ? 'tp' : reason === 'SL' || reason === 'TSL' ? 'sl' : reason === 'BE' ? 'neutral' : 'eod';
 }
 
 /**
@@ -58,10 +59,10 @@ export function tradeTimelineEvents(trade: TimelineTrade): TimelineEvent[] {
   const entrySide = (long ? 'ASK' : 'BID') as 'BID' | 'ASK';
   const exitSide = (long ? 'BID' : 'ASK') as 'BID' | 'ASK';
   const tone = exitTone(trade.reason);
-  const reasonLabel = trade.reason === 'TP' ? 'Take profit' : trade.reason === 'SL' ? 'Stop loss' : trade.reason === 'STRATEGY' ? 'Strategy exit' : 'End of data';
+  const reasonLabel = trade.reason === 'TP' ? 'Take profit' : trade.reason === 'SL' ? 'Stop loss' : trade.reason === 'TSL' ? 'Trailing stop' : trade.reason === 'BE' ? 'Break-even stop' : trade.reason === 'TIME' ? 'Time exit' : trade.reason === 'STRATEGY' ? 'Strategy exit' : 'End of data';
 
   const sltp: TimelineEvent =
-    trade.sl === undefined || trade.tp === undefined
+    trade.sl == null || trade.tp == null
       ? {
           key: 'sltp',
           title: 'SL / TP initialized',

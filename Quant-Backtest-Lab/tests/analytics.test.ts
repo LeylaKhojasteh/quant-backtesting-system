@@ -10,7 +10,16 @@ import {
   tradeQuality,
 } from '../app/analytics.js';
 import type { EnrichedTrade } from '../app/analytics.js';
-import { loadBacktestRun } from '../app/runner.js';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { mapPythonResultToBacktestRun, type PythonResult } from '../app/python-result.js';
+import { BacktestRunSchema } from '../app/schema.js';
+
+const here = dirname(fileURLToPath(import.meta.url));
+const archivedPayload = JSON.parse(
+  readFileSync(join(here, '..', 'public', 'runs-run_0001-result.json'), 'utf-8'),
+) as PythonResult;
 
 describe('analytics.ts - financial calculations', () => {
   test('canAnnualize requires >= 90 days and >= 30 observations', () => {
@@ -94,18 +103,13 @@ describe('analytics.ts - financial calculations', () => {
 });
 
 describe('analytics.ts - excursion availability', () => {
-  test('archived (live) runs keep MAE/MFE null and never synthesize them', async () => {
-    const result = await loadBacktestRun();
-    assert.ok(result.ok);
-    if (!result.ok) return;
-    const archived = { ...result.run, dataMode: 'live' as const };
-    const rows = enrichRunTrades(archived);
+  test('legacy archives without MAE/MFE stay null and never synthesize them', () => {
+    const run = BacktestRunSchema.parse(mapPythonResultToBacktestRun(archivedPayload));
+    const rows = enrichRunTrades(run);
     assert.ok(rows.length > 0);
     for (const t of rows) {
       assert.equal(t.mae, null, `trade ${t.id} MAE must stay null`);
       assert.equal(t.mfe, null, `trade ${t.id} MFE must stay null`);
-      assert.equal(t.maeTime, null);
-      assert.equal(t.mfeTime, null);
       assert.equal(typeof t.durationMin, 'number');
     }
     const q = tradeQuality(rows);
@@ -114,64 +118,23 @@ describe('analytics.ts - excursion availability', () => {
     assert.equal(q.mfeCapturePct, null);
   });
 
-  test('demo runs keep the seeded excursion path unchanged', async () => {
-    const result = await loadBacktestRun();
-    assert.ok(result.ok);
-    if (!result.ok) return;
-    const rows = enrichRunTrades(result.run);
+  test('engine-supplied MAE/MFE flow into enriched trades and quality metrics', () => {
+    const payload: PythonResult = {
+      ...archivedPayload,
+      trades: archivedPayload.trades.map((t) => ({ ...t, mae: -5, mfe: 10 })),
+    };
+    const rows = enrichRunTrades(BacktestRunSchema.parse(mapPythonResultToBacktestRun(payload)));
     assert.ok(rows.length > 0);
     for (const t of rows) {
-      assert.equal(typeof t.mae, 'number');
-      assert.equal(typeof t.mfe, 'number');
+      assert.equal(t.mae, -5);
+      assert.equal(t.mfe, 10);
     }
     const q = tradeQuality(rows);
-    assert.equal(typeof q.avgMAE, 'number');
-    assert.equal(typeof q.avgMFE, 'number');
+    assert.equal(q.avgMAE, -5);
+    assert.equal(q.avgMFE, 10);
     assert.equal(typeof q.mfeCapturePct, 'number');
-  });
-});
 
-describe('runner.ts - BacktestRun loader', () => {
-  test('loadBacktestRun returns valid BacktestRun with seeded demo data', async () => {
-    const result = await loadBacktestRun();
-    assert.ok(result.ok);
-    if (result.ok) {
-      const run = result.run;
-      assert.equal(run.dataMode, 'seeded-demo');
-      assert.ok(run.runId.match(/^[0-9a-f-]+$/));
-      assert.ok(run.runTimestampUtc.endsWith('Z'));
-      assert.equal(run.trades.length, 7);
-      assert.equal(run.equity.length, 7);
-      assert.equal(run.account.accountReady, false);
-      assert.equal(run.account.currency, null);
-      assert.equal(run.metrics.returnPct, null);
-      assert.equal(run.metrics.sharpe, null);
-      assert.equal(run.metrics.sortino, null);
-      assert.equal(run.metrics.calmar, null);
-      assert.equal(run.metrics.annualizedReturnPct, null);
-      assert.equal(run.metrics.maxDrawdownPct, null);
-      assert.ok((run.metrics.accountUnavailableReasons?.length ?? 0) > 0);
-      // Equity pnl matches cumulative
-      const expectedPnl = [-5.16, -10.18, -15.20, -20.24, -10.20, -15.38, -15.82];
-      run.equity.forEach((pt, i) => {
-        assert.ok(Math.abs(pt.pnl - expectedPnl[i]) < 0.01);
-      });
-    }
-  });
-
-  test('buildDemoRun output passes BacktestRunSchema validation', async () => {
-    const result = await loadBacktestRun();
-    assert.ok(result.ok);
-    if (result.ok) {
-      // Schema validation already happens inside loadBacktestRun
-      assert.ok(result.run.runId);
-      assert.ok(result.run.strategy.name);
-      assert.ok(result.run.instrument.symbol);
-    }
-  });
-
-  test('requestEngineRun boundary is not part of the v1 product surface', async () => {
-    const runner = await import('../app/runner.js');
-    assert.equal('requestEngineRun' in runner, false);
+    const q10 = tradeQuality(rows, 10);
+    assert.ok(Math.abs(q10.avgR - q.avgR / 2) < 1e-12);
   });
 });

@@ -62,15 +62,17 @@ export function executionChecks(trade: Trade, ticks: readonly TickPoint[] | null
   });
 
   const rulePass =
-    trade.reason === 'TP'
+    trade.reason === 'TP' && trade.tp != null
       ? long
         ? trade.exit >= trade.tp
         : trade.exit <= trade.tp
-      : trade.reason === 'SL'
+      : trade.reason === 'SL' && trade.sl != null
         ? long
           ? trade.exit <= trade.sl
           : trade.exit >= trade.sl
-        : true;
+        : trade.reason === 'EOD' || trade.reason === 'STRATEGY'
+          ? true
+          : null;
   checks.push({
     label:
       trade.reason === 'EOD'
