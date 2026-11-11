@@ -82,7 +82,7 @@ MAX_BODY_BYTES = 1 << 20  # 1 MiB is plenty for a run request
 
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]"}
 # e.g. XAUUSD_DUKAS_2025_01_ticks.csv -> symbol XAUUSD, month 2025-01
-_DATA_NAME_RE = re.compile(r"^(?P<symbol>[A-Za-z0-9]+?)_(?P<rest>.*)\.csv$", re.IGNORECASE)
+_DATA_NAME_RE = re.compile(r"^(?P<symbol>[A-Za-z0-9._-]+?)_(?P<rest>.*)\.csv$", re.IGNORECASE)
 _DATA_MONTH_RE = re.compile(r"(?P<year>20\d{2})[_-](?P<month>0[1-9]|1[0-2])")
 
 
@@ -131,7 +131,16 @@ def list_datasets(data_dir: str | Path = DEFAULT_DATA_DIR) -> list[dict]:
     return [_dataset_entry(p) for p in sorted(base.glob("*.csv")) if p.is_file()]
 
 
-_PROVIDER_LABEL = {"DUKAS": "Dukascopy"}
+_PROVIDER_LABEL = {"DUKAS": "Dukascopy", "BINANCE": "Binance"}
+
+
+def _complete_years(month_details: list[dict]) -> list[int]:
+    """Years with at least one explicitly complete month (never inferred)."""
+    return sorted({
+        int(str(d.get("month"))[:4])
+        for d in month_details
+        if d.get("completeness") == "complete" and d.get("month")
+    })
 
 
 def logical_datasets() -> list[dict]:
@@ -142,13 +151,53 @@ def logical_datasets() -> list[dict]:
     for ds in catalog.values():
         months = ds.get("months", [])
         partial = ds.get("partial_months", [])
+        details = ds.get("month_details", [])
+        unknown = [d["month"] for d in details if d.get("completeness") == "unknown"]
         years = ds.get("years", [])
-        complete_years = sorted({int(m[:4]) for m in months if m not in partial})
+        complete_years = _complete_years(details)
         provider = ds.get("provider", "")
         label_provider = _PROVIDER_LABEL.get(provider, provider)
+        if ds.get("data_type") == "candles":
+            # Candle datasets have no ticks and no prebuilt candle cache: every
+            # supported timeframe is derived from the 1m base on load.
+            base_tf = ds.get("base_timeframe") or "1min"
+            out.append({
+                "dataset_id": ds.get("dataset_id"),
+                "symbol": ds.get("symbol"),
+                "provider": provider,
+                "provider_label": label_provider,
+                "data_type": "candles",
+                "base_timeframe": base_tf,
+                "price_type": ds.get("price_type"),
+                "timezone": ds.get("timezone"),
+                "source_timezone": ds.get("source_timezone", "UTC"),
+                "label": f"{ds.get('symbol')} · {label_provider} · {base_tf}",
+                "subtitle": f"Candle data ({base_tf} base) · {', '.join(str(y) for y in years)}",
+                "coverage_start": ds.get("coverage_start"),
+                "coverage_end": ds.get("coverage_end"),
+                "years": years,
+                "complete_years": [],
+                "partial_months": [],
+                "unknown_months": [],
+                "supported_timeframes": list(data_engine.SUPPORTED_CANDLE_TIMEFRAMES),
+                "prepared_timeframes": list(data_engine.SUPPORTED_CANDLE_TIMEFRAMES),
+                "tick_ready": False,
+                "candle_ready": True,
+                "default_start": str(ds.get("coverage_start") or "")[:10],
+                "default_end": str(ds.get("coverage_end") or "")[:10],
+            })
+            continue
         prepared = data_engine.prepared_timeframes("cache:", symbol=ds.get("symbol"))
-        default_start = f"{min(complete_years)}-01-01" if complete_years else ds.get("coverage_start")
-        default_end = f"{max(complete_years)}-12-31" if complete_years else ds.get("coverage_end")
+        coverage_start = str(ds.get("coverage_start") or "")[:10] or None
+        coverage_end = str(ds.get("coverage_end") or "")[:10] or None
+        default_start = f"{min(complete_years)}-01-01" if complete_years else coverage_start
+        default_end = f"{max(complete_years)}-12-31" if complete_years else coverage_end
+        # Never default past the data that actually exists (a year with only a
+        # few complete months must not suggest a December end).
+        if coverage_end and default_end and default_end > coverage_end:
+            default_end = coverage_end
+        if coverage_start and default_start and default_start < coverage_start:
+            default_start = coverage_start
         out.append({
             "dataset_id": ds.get("dataset_id"),
             "symbol": ds.get("symbol"),
@@ -156,6 +205,7 @@ def logical_datasets() -> list[dict]:
             "provider_label": label_provider,
             "data_type": ds.get("data_type"),
             "timezone": ds.get("timezone"),
+            "source_timezone": ds.get("source_timezone", "UTC"),
             "label": f"{ds.get('symbol')} · {label_provider}",
             "subtitle": f"Tick data · {', '.join(str(y) for y in years)}",
             "coverage_start": ds.get("coverage_start"),
@@ -163,9 +213,11 @@ def logical_datasets() -> list[dict]:
             "years": years,
             "complete_years": complete_years,
             "partial_months": partial,
+            "unknown_months": unknown,
             "supported_timeframes": list(data_engine.SUPPORTED_CANDLE_TIMEFRAMES),
             "prepared_timeframes": prepared,
             "tick_ready": bool(months),
+            "candle_ready": False,
             "default_start": default_start,
             "default_end": default_end,
         })
@@ -173,11 +225,11 @@ def logical_datasets() -> list[dict]:
 
 
 def dataset_ticks_preview(dataset_id: str, start: str | None, end: str | None, limit: int = 25) -> dict:
-    """Read-only raw-tick preview from the canonical logical dataset (never demo)."""
+    """Read-only raw-tick preview from the canonical logical dataset."""
     from src import data_engine
     limit = max(1, min(int(limit), 200))
     frame = data_engine.load_ticks_frame(
-        f"cache:{dataset_id}", symbol=None, start=start, end=end)
+        f"cache:{dataset_id}", symbol=None, start=start, end=end, limit=limit)
     head = frame.head(limit)
     rows = [
         {
@@ -190,7 +242,7 @@ def dataset_ticks_preview(dataset_id: str, start: str | None, end: str | None, l
         }
         for r in head.itertuples(index=False)
     ]
-    return {"dataset_id": dataset_id, "rows": rows, "count": int(len(frame))}
+    return {"dataset_id": dataset_id, "rows": rows, "count": int(len(head))}
 
 
 def _error_for(exc: Exception) -> tuple[int, str, str]:
@@ -208,22 +260,39 @@ def _error_for(exc: Exception) -> tuple[int, str, str]:
         return 400, "invalid_dataset", str(exc)
     if isinstance(exc, json.JSONDecodeError):
         return 400, "invalid_request", f"invalid JSON body: {exc}"
+    from src import data_engine, instruments
+
+    if isinstance(exc, (data_engine.PartitionMissingError, data_engine.CoverageError,
+                        data_engine.RawDataMissingError)):
+        return 404, "dataset_unavailable", str(exc)
+    if isinstance(exc, data_engine.DataEngineError):
+        return 400, "data_engine_error", str(exc)
+    if isinstance(exc, instruments.InstrumentRegistryError):
+        return 500, "instrument_registry_error", str(exc)
     return 500, "internal_error", "unexpected bridge error"
 
 
 def import_strategy_payload(payload, strategy_dir: str | Path) -> dict:
-    """Validate/import a strategy from an HTTP payload; return a catalog entry."""
+    """Validate/import a strategy from an HTTP payload; return a catalog entry.
+
+    ``{"overwrite": true}`` updates an existing file in place instead of
+    raising ``strategy_conflict``; the response then carries ``"updated": true``
+    so the UI can say "updated" instead of "imported".
+    """
     if not isinstance(payload, dict):
         raise strategy_import.InvalidStrategyFileError("request body must be a JSON object")
-    unknown = sorted(set(payload) - {"filename", "source"})
+    unknown = sorted(set(payload) - {"filename", "source", "overwrite"})
     if unknown:
         raise strategy_import.InvalidStrategyFileError(
             f"unknown request field(s): {unknown}"
         )
-    strategy, target = strategy_import.import_strategy(
-        payload.get("filename"), payload.get("source"), strategy_dir=strategy_dir
+    strategy, target, created = strategy_import.import_strategy(
+        payload.get("filename"), payload.get("source"),
+        strategy_dir=strategy_dir, overwrite=bool(payload.get("overwrite", False)),
     )
-    return strategy_library.catalog_entry(str(target), strategy, source="file", file=str(target))
+    entry = strategy_library.catalog_entry(str(target), strategy, source="file", file=str(target))
+    entry["updated"] = not created
+    return entry
 
 
 def _compact_run_response(info: dict) -> dict:
@@ -410,6 +479,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
                     runs_dir=self._config["runs"],
                     public_dir=self._config["public"],
                     strategy_dir=self._config["strategy_dir"],
+                    data_dir=self._config["data_dir"],
                 )
                 self._send_json(201, {"job": run_jobs.registry.poll(record.job_id)})
                 return
@@ -432,6 +502,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
             if route == "/optimizations":
                 payload = self._read_json_body()
                 request = optimization.parse_optimization_payload(payload)
+                run_request.validate_bridge_data_source(request.market, self._config["data_dir"])
                 study = optimization.run_study(
                     request, runs=self._config["runs"], studies=self._config["studies"],
                     public=self._config["public"])
@@ -440,6 +511,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
             if route == "/walkforwards":
                 payload = self._read_json_body()
                 request = walk_forward.parse_walk_forward_payload(payload)
+                run_request.validate_bridge_data_source(request.market, self._config["data_dir"])
                 study = walk_forward.run_walk_forward(
                     request, runs=self._config["runs"], studies=self._config["studies"],
                     walkforwards=self._config["walkforwards"], public=self._config["public"])
@@ -464,6 +536,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 return
             payload = self._read_json_body()
             request = run_request.parse_request_payload(payload)
+            run_request.validate_bridge_data_source(request.market, self._config["data_dir"])
             info = run_backtest.execute_run(
                 request,
                 out=self._config["runs"],

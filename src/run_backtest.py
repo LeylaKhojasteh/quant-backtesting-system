@@ -17,7 +17,7 @@ Usage::
 
     # built-in strategy, archived locally
     python -m src.run_backtest --strategy candle_direction --symbol XAUUSD \\
-        --timeframe 15min --data data/XAUUSD_DUKAS_2025_01_ticks.csv \\
+        --timeframe 15min --data data/XAUUSD/XAUUSD_DUKAS_2025_01_ticks.csv \\
         --start 2025-01-02 --end 2025-01-02 --out runs \\
         --stop-distance 5 --take-profit-distance 10
 
@@ -116,6 +116,8 @@ def _parse_args(argv=None):
                         help="execution stop distance in price terms (omit = no stop)")
     parser.add_argument("--take-profit-distance", type=float, default=None,
                         help="execution take-profit distance in price terms (omit = no target)")
+    parser.add_argument("--spread-bps", type=float, default=None,
+                        help="assumed FULL spread in bps, candle datasets only")
     parser.add_argument("--no-report", action="store_true",
                         help="skip writing report.html (default: report is generated)")
     parser.add_argument("--publish", action="store_true",
@@ -197,13 +199,6 @@ def _data_fingerprint(market) -> str:
     return _fingerprint(Path(market.data_source))
 
 
-def _empty_external_signals():
-    """Empty signal frame for strategy-owned runs (signal accounting stays valid)."""
-    import pandas as pd
-
-    return pd.DataFrame(columns=["signal_candle_start", "signal_available_time", "direction"])
-
-
 def execute_run(
     request: run_request.BacktestRunRequest,
     *,
@@ -241,6 +236,19 @@ def execute_run(
     data_source = str(request.market.data_source)
     data_path = Path(data_source)
     cache_run = data_source.startswith("cache:")
+    # The dataset decides the execution model: tick data runs on the tick
+    # engine, candle-only datasets on the candle engine. Never by symbol name.
+    dataset_entry = None
+    dataset_type = "ticks"
+    if cache_run:
+        from src import data_engine as _dataset_catalog
+        catalog = _dataset_catalog.load_catalog().get("datasets", {})
+        # Strict identity: never guess the dataset from the symbol, otherwise a
+        # tick request could silently run on a candle dataset of the same symbol.
+        wanted = request.market.dataset_id or data_source[len("cache:"):]
+        dataset_entry = catalog.get(wanted)
+        if dataset_entry is not None and dataset_entry.get("data_type") == "candles":
+            dataset_type = "candles"
     try:
         timeframe = request.market.timeframe
         if timeframe not in run_request.SUPPORTED_TIMEFRAME_VALUES:
@@ -248,52 +256,63 @@ def execute_run(
                 "unsupported timeframe; supported: "
                 + ", ".join(run_request.SUPPORTED_TIMEFRAME_VALUES)
             )
-        if cache_run:
-            # Canonical Parquet ticks are the execution source (Data Engine).
-            from src import data_engine
-            ticks = data_engine.load_ticks_frame(
-                data_source, symbol=request.market.symbol,
-                start=request.market.start, end=request.market.end,
-                # Execution only needs timestamp + BID/ASK (the canonical store
-                # keeps volumes/source_row; the hot frame does not carry them).
-                columns=["timestamp", "bid", "ask"],
-            )
-        elif data_path.is_file():
-            ticks = _load_ticks(data_path)
+        if dataset_type == "candles":
+            # Candle dataset: no ticks exist, by definition. Signals are built
+            # from these bars and execution follows the candle model.
+            from src import candle_data
+            candles = candle_data.resolve_candle_dataset(
+                dataset_entry, timeframe, request.market.start, request.market.end)
+            ticks = None
+            if candles.empty:
+                raise run_errors.InvalidDatasetError(
+                    f"no candles in {data_source} for the requested range")
         else:
-            raise run_errors.InvalidDatasetError(f"dataset not found: {data_path}")
-        if cache_run:
-            # The Data Engine reader already returns canonical ticks: UTC tz-aware,
-            # filtered to the requested range, and chronologically ordered. Avoid
-            # redundant full-frame copies (tz convert / range filter / sort).
-            # The sorted-frame contract is recorded so downstream stages can
-            # skip their own defensive re-sort without changing any logic.
-            ticks.attrs["qbl_sorted"] = "timestamp"
-            if getattr(ticks["timestamp"].dt, "tz", None) is None:
-                ticks["timestamp"] = ticks["timestamp"].dt.tz_localize("UTC")
-        else:
-            if getattr(ticks["timestamp"].dt, "tz", None) is None:
-                ticks["timestamp"] = ticks["timestamp"].dt.tz_localize("UTC")
+            if cache_run:
+                # Canonical Parquet ticks are the execution source (Data Engine).
+                from src import data_engine
+                ticks = data_engine.load_ticks_frame(
+                    data_source, symbol=request.market.symbol,
+                    start=request.market.start, end=request.market.end,
+                    # Execution only needs timestamp + BID/ASK (the canonical store
+                    # keeps volumes/source_row; the hot frame does not carry them).
+                    columns=["timestamp", "bid", "ask"],
+                )
+            elif data_path.is_file():
+                ticks = _load_ticks(data_path)
             else:
-                ticks["timestamp"] = ticks["timestamp"].dt.tz_convert("UTC")
-            if request.market.start:
-                ticks = ticks[ticks["timestamp"] >= pd.Timestamp(request.market.start, tz="UTC")]
-            if request.market.end:
-                ticks = ticks[ticks["timestamp"] < pd.Timestamp(request.market.end, tz="UTC") + pd.Timedelta(days=1)]
-            ticks = ticks.sort_values("timestamp", kind="stable").reset_index(drop=True)
-        if ticks.empty:
-            raise run_errors.InvalidDatasetError(
-                f"no ticks in {data_source} for the requested range"
-            )
-        if cache_run:
-            # Strategy candles come from the derived candle cache (never raw CSV,
-            # never on-the-fly) for logical-dataset runs.
-            candles = data_engine.load_candles_frame(
-                data_source, timeframe=timeframe, symbol=request.market.symbol,
-                start=request.market.start, end=request.market.end,
-            )
-        else:
-            candles = ticks.set_index("timestamp")["bid"].resample(timeframe).ohlc().dropna()
+                raise run_errors.InvalidDatasetError(f"dataset not found: {data_path}")
+            if cache_run:
+                # The Data Engine reader already returns canonical ticks: UTC tz-aware,
+                # filtered to the requested range, and chronologically ordered. Avoid
+                # redundant full-frame copies (tz convert / range filter / sort).
+                # The sorted-frame contract is recorded so downstream stages can
+                # skip their own defensive re-sort without changing any logic.
+                ticks.attrs["qbl_sorted"] = "timestamp"
+                if getattr(ticks["timestamp"].dt, "tz", None) is None:
+                    ticks["timestamp"] = ticks["timestamp"].dt.tz_localize("UTC")
+            else:
+                if getattr(ticks["timestamp"].dt, "tz", None) is None:
+                    ticks["timestamp"] = ticks["timestamp"].dt.tz_localize("UTC")
+                else:
+                    ticks["timestamp"] = ticks["timestamp"].dt.tz_convert("UTC")
+                if request.market.start:
+                    ticks = ticks[ticks["timestamp"] >= pd.Timestamp(request.market.start, tz="UTC")]
+                if request.market.end:
+                    ticks = ticks[ticks["timestamp"] < pd.Timestamp(request.market.end, tz="UTC") + pd.Timedelta(days=1)]
+                ticks = ticks.sort_values("timestamp", kind="stable").reset_index(drop=True)
+            if ticks.empty:
+                raise run_errors.InvalidDatasetError(
+                    f"no ticks in {data_source} for the requested range"
+                )
+            if cache_run:
+                # Strategy candles come from the derived candle cache (never raw CSV,
+                # never on-the-fly) for logical-dataset runs.
+                candles = data_engine.load_candles_frame(
+                    data_source, timeframe=timeframe, symbol=request.market.symbol,
+                    start=request.market.start, end=request.market.end,
+                )
+            else:
+                candles = ticks.set_index("timestamp")["bid"].resample(timeframe).ohlc().dropna()
     except run_errors.RunError:
         raise
     except Exception as exc:
@@ -315,7 +334,9 @@ def execute_run(
     # Cached-partition path: per-month reports are reused by fingerprint, so
     # repeat runs over unchanged data validate in seconds. Raw-CSV runs keep
     # the full direct validation (no cache exists for them).
-    if cache_run:
+    if dataset_type == "candles":
+        tick_report = None
+    elif cache_run:
         from src import data_engine as _de_mod
 
         tick_report = _de_mod.validate_range(
@@ -326,10 +347,17 @@ def execute_run(
         from src import tick_validation as _tick_validation_mod
 
         tick_report = _tick_validation_mod.validate_ticks(ticks)
-    if tick_report.fatal:
+    if tick_report is not None and tick_report.fatal:
         raise run_errors.InvalidDatasetError("; ".join(tick_report.errors))
-    data_warnings = list(tick_report.warnings)
-    data_validation = dict(tick_report.validation)
+    if tick_report is not None:
+        data_warnings = list(tick_report.warnings)
+        data_validation = dict(tick_report.validation)
+    else:
+        data_warnings = [
+            "Candle execution: OHLC fills with an assumed spread of "
+            f"{request.execution.spread_bps or 0.0} bps; confirm on tick data."
+        ]
+        data_validation = {"candles_valid": True}
 
     resolved_instrument = accounting.resolve_instrument(
         request.market.symbol, request.instrument
@@ -370,7 +398,10 @@ def execute_run(
             detail = row.get("_exit_reason_detail")
             if record.exit_reason == "STRATEGY" and detail:
                 record.exit_reason_detail = str(detail)
-        signals = _empty_external_signals()
+        observed_concurrency = _external.max_concurrent_positions(trades_df)
+        # A strategy-owned run has no signal stream: reporting 0 received with
+        # trades executed would be contradictory, so signal accounting is N/A.
+        signals = None
     else:
         strategy.configure(effective_parameters)
         signals = strategy_loader.generate_validated_signals(
@@ -379,12 +410,22 @@ def execute_run(
         started = utc_now_iso()
         # The engine receives only normalized signals plus execution settings.
         try:
-            trades_df = engine.run_backtest(
-                ticks,
-                signals,
-                request.execution.stop_distance,
-                request.execution.take_profit_distance,
-            )
+            if dataset_type == "candles":
+                from src import candle_engine as _candle_engine
+                trades_df = _candle_engine.run_candle_backtest(
+                    candles,
+                    signals,
+                    stop_distance=request.execution.stop_distance,
+                    take_profit_distance=request.execution.take_profit_distance,
+                    spread_bps=request.execution.spread_bps or 0.0,
+                )
+            else:
+                trades_df = engine.run_backtest(
+                    ticks,
+                    signals,
+                    request.execution.stop_distance,
+                    request.execution.take_profit_distance,
+                )
         except run_errors.RunError:
             raise
         except Exception as exc:
@@ -392,12 +433,22 @@ def execute_run(
         finished = utc_now_iso()
 
         records = trades_from_engine(trades_df)
+        observed_concurrency = None
+    ambiguous_exits = (
+        int(trades_df["ambiguous_exit"].sum())
+        if "ambiguous_exit" in getattr(trades_df, "columns", [])
+        else None
+    )
     metrics = compute_metrics(records)
     equity = equity_from_trades(records)
     meta = strategy.metadata()
 
-    start_iso = ticks["timestamp"].iloc[0].isoformat().replace("+00:00", "Z")
-    end_iso = ticks["timestamp"].iloc[-1].isoformat().replace("+00:00", "Z")
+    if ticks is not None:
+        start_iso = ticks["timestamp"].iloc[0].isoformat().replace("+00:00", "Z")
+        end_iso = ticks["timestamp"].iloc[-1].isoformat().replace("+00:00", "Z")
+    else:
+        start_iso = candles.index[0].isoformat().replace("+00:00", "Z")
+        end_iso = candles.index[-1].isoformat().replace("+00:00", "Z")
 
     # The user's requested window is preserved separately from the observed
     # tick coverage above, so the UI can show the requested range without
@@ -416,6 +467,17 @@ def execute_run(
     # Archived data source: a friendly logical id for Data Engine runs (never the
     # internal `cache:` resolver key), else the raw path (legacy runs).
     archive_source = request.market.dataset_id if cache_run else str(data_path)
+    if dataset_type == "candles":
+        from src import candle_data as _candle_data
+        data_fingerprint = _candle_data.candle_fingerprint(
+            dataset_entry, request.market.start, request.market.end)
+    else:
+        data_fingerprint = _data_fingerprint(request.market)
+    # Only an engine-executed run has a signal stream to validate; a
+    # strategy-owned run makes no claim about signals at all.
+    validation_payload = dict(data_validation)
+    if strategy_kind != "external":
+        validation_payload["signals_valid"] = True
     result = BacktestResult(
         contract_version=CONTRACT_VERSION,
         run_id=run_id or f"run_{uuid.uuid4().hex[:8]}",
@@ -428,7 +490,7 @@ def execute_run(
             end=end_iso,
             parameters=effective_parameters,
             data_source=archive_source,
-            data_fingerprint=_data_fingerprint(request.market),
+            data_fingerprint=data_fingerprint,
             requested_start=requested_start,
             requested_end=requested_end,
             instrument=resolved_instrument.to_dict() if resolved_instrument is not None else None,
@@ -438,21 +500,28 @@ def execute_run(
         metrics=metrics,
         data_quality=DataQuality(
             data_source=archive_source,
-            tick_count=len(ticks),
+            # Candle datasets have no ticks at all; None is the honest value.
+            tick_count=None if ticks is None else len(ticks),
             candle_count=len(candles),
-            validation={
-                "signals_valid": True,
-                **data_validation,
-            },
+            validation=validation_payload,
             warnings=data_warnings,
         ),
         execution=ExecutionInfo(
             started_at=started,
             finished_at=finished,
-            signals_received=len(signals),
+            # Signal accounting only exists for engine-executed runs; a
+            # strategy-owned run reports N/A instead of a fake zero.
+            signals_received=None if signals is None else len(signals),
             signals_executed=len(records),
-            signals_ignored=max(0, len(signals) - len(records)),
-            execution_model="strategy" if strategy_kind == "external" else "engine",
+            signals_ignored=(
+                None if signals is None else max(0, len(signals) - len(records))
+            ),
+            execution_model=(
+                "strategy" if strategy_kind == "external"
+                else ("candle" if dataset_type == "candles" else "engine")
+            ),
+            max_concurrent_positions=observed_concurrency,
+            ambiguous_exits=ambiguous_exits,
         ),
     )
 
@@ -486,7 +555,12 @@ def execute_run(
         end=result.config.end,
         instrument=resolved_instrument,
     )
-    if cache_run:
+    if dataset_type == "candles":
+        from src import candle_data as _candle_data
+        config["market"]["data_source"] = archive_source
+        config["data_provenance"] = _candle_data.candle_provenance(
+            dataset_entry, request.market.start, request.market.end)
+    elif cache_run:
         from src import data_engine
         config["market"]["data_source"] = archive_source
         config["data_provenance"] = data_engine.data_provenance(
@@ -614,6 +688,7 @@ def main(argv=None) -> str:
         execution=run_request.ExecutionRequest(
             stop_distance=args.stop_distance,
             take_profit_distance=args.take_profit_distance,
+            spread_bps=args.spread_bps,
         ),
         publish=args.publish,
     )

@@ -15,10 +15,12 @@ Layering:
         ▼  reader (partition pruning, [start, end])
     canonical tick frame  ->  existing candle/backtest path
 
-Semantics preserved: Dukascopy wall-clock is treated as UTC without shifting,
-BID/ASK stay authoritative (mid is never derived), no gap filling, no synthetic
-ticks, no dedup, no rounding; stable chronological order with ``source_row``
-preserving equal-timestamp order. ``src/backtest.py`` is never touched.
+Semantics preserved: naive wall-clock timestamps are interpreted in the
+configured source timezone (default UTC), offset-aware timestamps keep their
+offset, BID/ASK stay authoritative (mid is never derived), no gap filling, no
+synthetic ticks, no dedup, no rounding; stable chronological order with
+``source_row`` preserving equal-timestamp order. ``src/backtest.py`` is never
+touched.
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import numpy as np
 import pandas as pd
@@ -46,7 +49,9 @@ from src import config
 DATA_CACHE_SCHEMA_VERSION = 1
 DEFAULT_CACHE_ROOT = config.CACHE_ROOT
 DEFAULT_DATA_DIR = config.DATA_DIR
-PROVIDER_DIR = "DUKAS"
+DEFAULT_COMPLETENESS_PATH = Path(__file__).resolve().parent.parent / "config" / "source_completeness.json"
+DEFAULT_TIMEZONES_PATH = Path(__file__).resolve().parent.parent / "config" / "source_timezones.json"
+DEFAULT_PROVIDERS_PATH = Path(__file__).resolve().parent.parent / "config" / "providers.json"
 
 CANONICAL_COLUMNS = ("timestamp", "bid", "ask", "bid_volume", "ask_volume", "source_row")
 READ_COLUMNS = ("timestamp", "bid", "ask", "bid_volume", "ask_volume", "source_row")
@@ -86,11 +91,11 @@ ARROW_SCHEMA = pa.schema([
 ])
 
 _MONTH_RE = re.compile(
-    r"^(?P<symbol>[A-Za-z0-9]+)_(?P<provider>[A-Za-z0-9]+)_(?P<year>\d{4})_(?P<month>\d{2})_ticks\.csv$",
+    r"^(?P<symbol>[A-Za-z0-9._-]+)_(?P<provider>[A-Za-z0-9]+)_(?P<year>\d{4})_(?P<month>\d{2})_ticks\.csv$",
     re.IGNORECASE,
 )
 _AGG_RE = re.compile(
-    r"^(?P<symbol>[A-Za-z0-9]+)_(?P<provider>[A-Za-z0-9]+)_(?P<tag>[A-Za-z0-9]+)_ticks\.csv$",
+    r"^(?P<symbol>[A-Za-z0-9._-]+)_(?P<provider>[A-Za-z0-9]+)_(?P<tag>[A-Za-z0-9]+)_ticks\.csv$",
     re.IGNORECASE,
 )
 _DUKAS_STAMP = re.compile(r"^\d{4}\.\d{2}\.\d{2}$")
@@ -150,8 +155,68 @@ class PartitionId:
         return f"{self.symbol}/{self.provider}/{self.year}-{self.month:02d}"
 
 
+def _providers_path() -> Path:
+    env = os.environ.get("QBL_PROVIDERS_FILE")
+    return Path(env) if env else DEFAULT_PROVIDERS_PATH
+
+
+def load_providers(path: str | Path | None = None) -> list[str]:
+    """Known provider tokens, longest first, for unambiguous filename parsing."""
+    target = Path(path) if path is not None else _providers_path()
+    if not target.is_file():
+        return []
+    try:
+        payload = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise DataEngineError(f"invalid provider registry {target}: {exc}") from exc
+    raw = payload.get("providers", payload) if isinstance(payload, dict) else None
+    if isinstance(raw, dict):
+        raw = list(raw.keys())
+    if not isinstance(raw, list) or not all(isinstance(x, str) for x in raw):
+        raise DataEngineError(f"provider registry {target} must contain a string list")
+    providers = sorted({x.strip().upper() for x in raw if x.strip()},
+                       key=lambda p: (-len(p), p))
+    for provider in providers:
+        if not re.fullmatch(r"[A-Za-z0-9_]+", provider):
+            raise DataEngineError(f"provider registry {target}: invalid provider {provider!r}")
+    return providers
+
+
+def _parse_with_known_provider(name: str) -> dict | None:
+    for provider in load_providers():
+        token = re.escape(provider)
+        month = re.match(
+            rf"^(?P<symbol>[A-Za-z0-9._-]+)_{token}_(?P<year>\d{{4}})_(?P<month>\d{{2}})_ticks\.csv$",
+            name, re.IGNORECASE,
+        )
+        if month:
+            return {
+                "symbol": month.group("symbol").upper(),
+                "provider": provider,
+                "year": int(month.group("year")),
+                "month": int(month.group("month")),
+                "kind": "month",
+            }
+        agg = re.match(
+            rf"^(?P<symbol>[A-Za-z0-9._-]+)_{token}_(?P<tag>[A-Za-z0-9]+)_ticks\.csv$",
+            name, re.IGNORECASE,
+        )
+        if agg:
+            return {
+                "symbol": agg.group("symbol").upper(),
+                "provider": provider,
+                "year": None,
+                "month": None,
+                "kind": "aggregate",
+            }
+    return None
+
+
 def parse_source_filename(name: str) -> dict | None:
     """Return structured metadata for a monthly source file, else None."""
+    known = _parse_with_known_provider(name)
+    if known is not None:
+        return known
     match = _MONTH_RE.match(name)
     if match:
         return {
@@ -188,6 +253,53 @@ def partition_parquet(root: str | Path, pid: PartitionId) -> Path:
 
 def partition_metadata(root: str | Path, pid: PartitionId) -> Path:
     return partition_dir(root, pid) / "metadata.json"
+
+
+def partition_validation_path(root: str | Path, pid: PartitionId) -> Path:
+    """Sidecar holding the cached per-partition tick-validation report."""
+    return partition_dir(root, pid) / "validation.json"
+
+
+def read_partition_validation(root: str | Path, pid: PartitionId,
+                              fingerprint: str | None) -> dict | None:
+    """Return the cached validation doc when it matches ``fingerprint``.
+
+    Any mismatch (missing file, schema change, fingerprint change) means
+    "not cached" — the caller re-validates that partition from Parquet.
+    """
+    from src import tick_validation as _tv
+
+    if not fingerprint:
+        return None
+    try:
+        doc = json.loads(partition_validation_path(root, pid).read_text(encoding="utf-8"))
+    except OSError:
+        return None
+    except ValueError:
+        return None
+    if not isinstance(doc, dict):
+        return None
+    if doc.get("schema") != _tv.PARTITION_VALIDATION_SCHEMA:
+        return None
+    if doc.get("fingerprint") != fingerprint:
+        return None
+    report = doc.get("report")
+    if not isinstance(report, dict):
+        return None
+    return doc
+
+
+def write_partition_validation(root: str | Path, pid: PartitionId,
+                               fingerprint: str, report) -> None:
+    """Persist one partition's validation report next to its Parquet file."""
+    doc = {
+        "schema": report.to_dict()["schema"],
+        "fingerprint": fingerprint,
+        "partition": pid.label,
+        "report": report.to_dict(),
+    }
+    _atomic_write_text(partition_validation_path(root, pid),
+                       json.dumps(doc, indent=2, ensure_ascii=False))
 
 
 def manifest_path(root: str | Path = DEFAULT_CACHE_ROOT) -> Path:
@@ -243,11 +355,86 @@ def _is_dukascopy(path: Path) -> bool:
     return bool(_DUKAS_STAMP.match(first.split(",", 1)[0].strip()))
 
 
-def _timestamp_from_strings(dates: pd.Series, times: pd.Series) -> pd.Series:
-    return pd.to_datetime(
-        dates.astype(str) + " " + times.astype(str),
-        format="%Y.%m.%d %H:%M:%S.%f", utc=True,
-    )
+def _tzinfo(name: str) -> ZoneInfo:
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError as exc:
+        raise ValueError(f"unknown source timezone: {name!r}") from exc
+
+
+def _localize_naive(parsed: pd.Series, timezone_name: str) -> pd.Series:
+    tz = _tzinfo(timezone_name)
+    if getattr(parsed.dt, "tz", None) is None:
+        return parsed.dt.tz_localize(tz).dt.tz_convert("UTC")
+    return parsed.dt.tz_convert("UTC")
+
+
+def _timestamp_from_strings(
+    dates: pd.Series, times: pd.Series, timezone_name: str = "UTC"
+) -> pd.Series:
+    text = dates.astype(str) + " " + times.astype(str)
+    try:
+        parsed = pd.to_datetime(text, format="%Y.%m.%d %H:%M:%S.%f", utc=False)
+    except (TypeError, ValueError):
+        # Dukascopy exports without microseconds are still the same wall clock.
+        parsed = pd.to_datetime(text, utc=False, errors="coerce")
+    if parsed.isna().any():
+        raise ValueError("unparseable Dukascopy timestamp")
+    return _localize_naive(parsed, timezone_name)
+
+
+def parse_timestamps(values: pd.Series, timezone_name: str = "UTC") -> pd.Series:
+    """Parse ISO strings or numeric epoch timestamps (s/ms/us/ns) to UTC.
+
+    Naive timestamps are interpreted in the source timezone (default UTC).
+    Offset-aware timestamps keep their offset. Numeric epochs are absolute and
+    always UTC. Numeric YYYYMMDD strings are calendar dates in the source
+    timezone. Anything unparseable is rejected instead of silently becoming NaT.
+    """
+    _tzinfo(timezone_name)  # fail early on a bad registry value
+    text = values.astype(str).str.strip()
+    numeric = pd.to_numeric(text, errors="coerce")
+    parsed: pd.Series
+    if len(text) and numeric.notna().all():
+        date_like = text.str.fullmatch(r"\d{8}").all()
+        if date_like:
+            years = pd.to_numeric(text.str[:4], errors="coerce")
+            if years.between(1900, 2100).all():
+                parsed = _localize_naive(
+                    pd.to_datetime(text, format="%Y%m%d", utc=False), timezone_name
+                )
+            else:
+                parsed = _epoch_to_datetime(numeric)
+        else:
+            parsed = _epoch_to_datetime(numeric)
+    else:
+        offset = text.str.contains(r"(?:Z|[+-]\d{2}:?\d{2})$", regex=True)
+        if offset.any() and not offset.all():
+            raise ValueError("mixed timezone-aware and naive timestamps")
+        if offset.all():
+            parsed = pd.to_datetime(values, utc=True, errors="coerce")
+        else:
+            parsed = _localize_naive(
+                pd.to_datetime(values, utc=False, errors="coerce"), timezone_name
+            )
+    if parsed.isna().any():
+        bad = values[parsed.isna()].iloc[0]
+        raise ValueError(f"unparseable timestamp: {bad!r}")
+    return parsed
+
+
+def _epoch_to_datetime(numeric: pd.Series) -> pd.Series:
+    """Detect seconds / milliseconds / microseconds / nanoseconds by magnitude."""
+    peak = float(numeric.abs().max())
+    if peak >= 1e17:
+        unit = "ns"
+    elif peak >= 1e14:
+        unit = "us"
+    elif peak >= 1e11:
+        unit = "ms"
+    else:
+        unit = "s"
+    return pd.to_datetime(numeric, unit=unit, utc=True)
 
 
 def canonical_chunks(path: str | Path, chunksize: int = DEFAULT_CHUNK_ROWS):
@@ -259,6 +446,10 @@ def canonical_chunks(path: str | Path, chunksize: int = DEFAULT_CHUNK_ROWS):
     path = Path(path)
     if not path.is_file():
         raise RawDataMissingError(f"raw source not found: {path}")
+    source_meta = parse_source_filename(path.name)
+    source_tz = source_timezone_for(
+        path.name, source_meta.get("provider") if source_meta else None
+    )
     dukas = _is_dukascopy(path)
     offset = 0
     if dukas:
@@ -267,9 +458,10 @@ def canonical_chunks(path: str | Path, chunksize: int = DEFAULT_CHUNK_ROWS):
         for chunk in reader:
             if chunk.shape[1] < 4:
                 raise MalformedSchemaError(f"expected >=4 columns in {path.name}")
-            stamps = _timestamp_from_strings(chunk[0], chunk[1])
-            bv = chunk[4] if chunk.shape[1] > 4 else 0
-            av = chunk[5] if chunk.shape[1] > 5 else 0
+            stamps = _timestamp_from_strings(chunk[0], chunk[1], timezone_name=source_tz)
+            zeros = pd.Series(0.0, index=chunk.index, dtype="float64")
+            bv = chunk[4] if chunk.shape[1] > 4 else zeros
+            av = chunk[5] if chunk.shape[1] > 5 else zeros
             frame = pd.DataFrame({
                 "timestamp": stamps,
                 "bid": pd.to_numeric(chunk[2], errors="coerce").astype("float64"),
@@ -282,16 +474,34 @@ def canonical_chunks(path: str | Path, chunksize: int = DEFAULT_CHUNK_ROWS):
             yield frame
     else:
         probe = pd.read_csv(path, nrows=0)
-        if not {"timestamp", "bid", "ask"} <= set(probe.columns):
-            raise MalformedSchemaError(f"unrecognized CSV schema in {path.name}")
-        reader = pd.read_csv(path, chunksize=chunksize, parse_dates=["timestamp"])
+        probe.columns = [str(c).strip().lower() for c in probe.columns]
+        columns = set(probe.columns)
+        if not {"timestamp", "bid", "ask"} <= columns:
+            if {"open", "high", "low", "close"} <= columns:
+                raise MalformedSchemaError(
+                    f"{path.name}: OHLCV candles are not supported; provide tick timestamp,bid,ask"
+                )
+            if "price" in columns:
+                raise MalformedSchemaError(
+                    f"{path.name}: trade-only price/volume data is not supported; provide bid and ask"
+                )
+            raise MalformedSchemaError(
+                f"{path.name}: unrecognized CSV schema; required columns are timestamp,bid,ask"
+            )
+        reader = pd.read_csv(path, chunksize=chunksize)
         for chunk in reader:
+            chunk.columns = [str(c).strip().lower() for c in chunk.columns]
+            zeros = pd.Series(0.0, index=chunk.index, dtype="float64")
+            try:
+                stamps = parse_timestamps(chunk["timestamp"], timezone_name=source_tz)
+            except ValueError as exc:
+                raise MalformedSchemaError(f"{path.name}: {exc}") from exc
             frame = pd.DataFrame({
-                "timestamp": pd.to_datetime(chunk["timestamp"], utc=True),
+                "timestamp": stamps,
                 "bid": pd.to_numeric(chunk["bid"], errors="coerce").astype("float64"),
                 "ask": pd.to_numeric(chunk["ask"], errors="coerce").astype("float64"),
-                "bid_volume": pd.to_numeric(chunk["bid_volume"] if "bid_volume" in chunk else 0, errors="coerce").astype("float64"),
-                "ask_volume": pd.to_numeric(chunk["ask_volume"] if "ask_volume" in chunk else 0, errors="coerce").astype("float64"),
+                "bid_volume": pd.to_numeric(chunk["bid_volume"] if "bid_volume" in chunk else zeros, errors="coerce").astype("float64"),
+                "ask_volume": pd.to_numeric(chunk["ask_volume"] if "ask_volume" in chunk else zeros, errors="coerce").astype("float64"),
             })
             frame["source_row"] = np.arange(offset, offset + len(frame), dtype="int64")
             offset += len(frame)
@@ -303,13 +513,32 @@ def canonical_chunks(path: str | Path, chunksize: int = DEFAULT_CHUNK_ROWS):
 # --------------------------------------------------------------------------
 
 
+def _raw_csv_paths(base: Path) -> list[Path]:
+    """Every raw CSV under ``base``, recursively, in a deterministic order.
+
+    Symbol subfolders are supported (``data/XAUUSD/...``). Any directory whose
+    name starts with ``_`` or ``.`` is skipped, so backups and archives
+    (``data/_archive``, ``data/_replaced``) are never ingested by accident.
+    """
+    paths = [
+        path
+        for path in base.rglob("*.csv")
+        if path.is_file()
+        and not any(
+            part.startswith(("_", "."))
+            for part in path.relative_to(base).parts[:-1]
+        )
+    ]
+    return sorted(paths)
+
+
 def inventory(data_dir: str | Path = DEFAULT_DATA_DIR) -> list[dict]:
-    """Deterministic, read-only inventory of every ``*.csv`` in the source dir."""
+    """Deterministic, read-only inventory of every raw ``*.csv`` (recursive)."""
     base = Path(data_dir)
     if not base.is_dir():
         raise RawDataMissingError(f"raw data directory missing: {base}")
     entries: list[dict] = []
-    for path in sorted(base.glob("*.csv")):
+    for path in _raw_csv_paths(base):
         meta = parse_source_filename(path.name) or {
             "symbol": path.stem.split("_")[0].upper(), "provider": "UNKNOWN",
             "year": None, "month": None, "kind": "unknown",
@@ -331,7 +560,7 @@ def inventory(data_dir: str | Path = DEFAULT_DATA_DIR) -> list[dict]:
                 last = str(chunk.iloc[-1]["timestamp"])
             rows += len(chunk)
         entry = {
-            "relative_path": path.name,
+            "relative_path": path.relative_to(base).as_posix(),
             "size_bytes": path.stat().st_size,
             "format": "dukascopy-csv" if dukas else "csv",
             "rows": rows,
@@ -394,9 +623,16 @@ def build_partition(
     root: str | Path = DEFAULT_CACHE_ROOT,
     manifest: dict | None = None,
     force: bool = False,
+    allow_source_change: bool = False,
     chunk_rows: int = DEFAULT_CHUNK_ROWS,
 ) -> dict:
-    """Convert one monthly source file to an atomic Parquet partition."""
+    """Convert one monthly source file to an atomic Parquet partition.
+
+    A changed raw file is refused by default: replacing a source silently
+    would rewrite history. ``allow_source_change=True`` is the explicit
+    acknowledgement (CLI: ``--accept-source-change``); the manifest then
+    records the new fingerprint.
+    """
     raw_path = Path(raw_path)
     if not raw_path.is_file():
         raise RawDataMissingError(f"raw source not found: {raw_path}")
@@ -404,7 +640,7 @@ def build_partition(
     current_sha = sha256_file(raw_path)
     rel = raw_path.name
     prior = manifest["sources"].get(rel)
-    if prior and prior.get("sha256") != current_sha:
+    if prior and prior.get("sha256") != current_sha and not allow_source_change:
         raise SourceChangedError(
             f"raw source changed unexpectedly: {rel} "
             f"(expected {prior.get('sha256')[:12]}…, found {current_sha[:12]}…)"
@@ -462,6 +698,7 @@ def build_partition(
         "source_role": "monthly_partition",
         "included_in_logical_dataset": True,
         "completeness": source_completeness(rel),
+        "source_timezone": source_timezone_for(rel, pid.provider),
         "derived_partition": (
             f"ticks/provider={pid.provider}/symbol={pid.symbol}"
             f"/year={pid.year}/month={pid.month:02d}/ticks.parquet"
@@ -484,14 +721,32 @@ def build_partition(
 
 
 def discover_partitions(data_dir: str | Path = DEFAULT_DATA_DIR) -> list[tuple[Path, PartitionId]]:
+    """Monthly raw files (recursive), rejecting duplicate partitions loudly.
+
+    Two files for the same provider/symbol/year/month would silently double
+    the partition, so that is an error that names both paths.
+    """
     base = Path(data_dir)
     if not base.is_dir():
         raise RawDataMissingError(f"raw data directory missing: {base}")
     found: list[tuple[Path, PartitionId]] = []
-    for path in sorted(base.glob("*.csv")):
+    seen: dict[tuple, Path] = {}
+    for path in _raw_csv_paths(base):
         meta = parse_source_filename(path.name)
-        if meta and meta["kind"] == "month":
-            found.append((path, PartitionId(meta["provider"], meta["symbol"], meta["year"], meta["month"])))
+        if not meta or meta["kind"] != "month":
+            continue
+        key = (meta["provider"], meta["symbol"], meta["year"], meta["month"])
+        previous = seen.get(key)
+        if previous is not None:
+            raise MalformedSchemaError(
+                "duplicate monthly source for "
+                f"{meta['provider']}/{meta['symbol']} "
+                f"{meta['year']}-{meta['month']:02d}: "
+                f"{previous.relative_to(base).as_posix()} and "
+                f"{path.relative_to(base).as_posix()}"
+            )
+        seen[key] = path
+        found.append((path, PartitionId(*key)))
     return found
 
 
@@ -501,6 +756,7 @@ def build_all(
     *,
     month: str | None = None,
     force: bool = False,
+    allow_source_change: bool = False,
     chunk_rows: int = DEFAULT_CHUNK_ROWS,
 ) -> list[dict]:
     manifest = load_manifest(root)
@@ -508,7 +764,10 @@ def build_all(
     for path, pid in discover_partitions(data_dir):
         if month and f"{pid.year}-{pid.month:02d}" != month:
             continue
-        results.append(build_partition(path, pid, root=root, manifest=manifest, force=force, chunk_rows=chunk_rows))
+        results.append(build_partition(
+            path, pid, root=root, manifest=manifest, force=force,
+            allow_source_change=allow_source_change, chunk_rows=chunk_rows,
+        ))
     build_catalog(root)
     return results
 
@@ -608,21 +867,82 @@ def _read_partition_meta(root: str | Path, pid: PartitionId) -> dict:
 #: coverage. A monthly source not present here is ``unknown`` until its
 #: completeness is explicitly declared. (Observed first/last/row_count describe
 #: data; they do not determine completeness.)
-SOURCE_COMPLETENESS: dict[str, str] = {
-    **{f"XAUUSD_DUKAS_2025_{m:02d}_ticks.csv": "complete" for m in range(1, 13)},
-    "XAUUSD_DUKAS_2026_01_ticks.csv": "partial",
-    # The bundled newcomer sample is one real trading session, not a month:
-    # it must be declared partial so the UI defaults to its actual coverage
-    # instead of a whole-year range that contains no data.
-    "XAUUSD_SAMPLE_2024_12_ticks.csv": "partial",
-}
+def _completeness_path() -> Path:
+    env = os.environ.get("QBL_COMPLETENESS_FILE")
+    return Path(env) if env else DEFAULT_COMPLETENESS_PATH
+
+
+def load_source_completeness(path: str | Path | None = None) -> dict[str, str]:
+    """Load explicit source completeness metadata (data file, not code)."""
+    target = Path(path) if path is not None else _completeness_path()
+    if not target.is_file():
+        return {}
+    try:
+        payload = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise DataEngineError(f"invalid completeness registry {target}: {exc}") from exc
+    files = payload.get("files", payload) if isinstance(payload, dict) else None
+    if not isinstance(files, dict):
+        raise DataEngineError(f"completeness registry {target} must contain a 'files' object")
+    out: dict[str, str] = {}
+    for key, value in files.items():
+        state = str(value)
+        if state not in {"complete", "partial", "unknown"}:
+            raise DataEngineError(
+                f"completeness registry {target}: {key!r} has invalid state {value!r}"
+            )
+        out[str(key)] = state
+    return out
 
 
 def source_completeness(name: str | None) -> str:
     """Explicit completeness for a source filename; ``unknown`` when undeclared."""
     if not name:
         return "unknown"
-    return SOURCE_COMPLETENESS.get(name, "unknown")
+    return load_source_completeness().get(name, "unknown")
+
+
+def _timezones_path() -> Path:
+    env = os.environ.get("QBL_SOURCE_TIMEZONES_FILE")
+    return Path(env) if env else DEFAULT_TIMEZONES_PATH
+
+
+def load_source_timezones(path: str | Path | None = None) -> dict:
+    """Load explicit source-timezone metadata (data file, not code)."""
+    target = Path(path) if path is not None else _timezones_path()
+    if not target.is_file():
+        return {"providers": {}, "files": {}}
+    try:
+        payload = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise DataEngineError(f"invalid timezone registry {target}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise DataEngineError(f"timezone registry {target} must be a JSON object")
+    providers = payload.get("providers", {})
+    files = payload.get("files", {})
+    if not isinstance(providers, dict) or not isinstance(files, dict):
+        raise DataEngineError(f"timezone registry {target} must contain objects for providers/files")
+    out = {"providers": {}, "files": {}}
+    for label, mapping in (("providers", providers), ("files", files)):
+        for key, tz in mapping.items():
+            if not isinstance(tz, str) or not tz.strip():
+                raise DataEngineError(f"timezone registry {target}: {label}[{key!r}] must be a timezone name")
+            _tzinfo(tz.strip())  # validate early
+            key_text = str(key)
+            out[label][key_text.upper() if label == "providers" else key_text] = tz.strip()
+    return out
+
+
+def source_timezone_for(
+    name: str | None, provider: str | None = None, path: str | Path | None = None
+) -> str:
+    """Filename override, then provider, then UTC."""
+    registry = load_source_timezones(path)
+    if name and name in registry["files"]:
+        return registry["files"][name]
+    meta = parse_source_filename(name or "")
+    resolved_provider = (provider or (meta or {}).get("provider") or "").upper()
+    return registry["providers"].get(resolved_provider, "UTC")
 
 
 def build_catalog(root: str | Path = DEFAULT_CACHE_ROOT) -> dict:
@@ -657,6 +977,7 @@ def build_catalog(root: str | Path = DEFAULT_CACHE_ROOT) -> dict:
                         "last_timestamp": str(meta.get("last_timestamp")),
                         # Explicit source provenance only — never span/coverage inferred.
                         "completeness": source_completeness(meta.get("source_relative_path")),
+                        "source_timezone": meta.get("source_timezone", "UTC"),
                     })
                     if first is None or str(meta["first_timestamp"]) < first:
                         first = str(meta["first_timestamp"])
@@ -667,6 +988,11 @@ def build_catalog(root: str | Path = DEFAULT_CACHE_ROOT) -> dict:
                 datasets[dataset_id] = {
                     "dataset_id": dataset_id, "symbol": symbol, "provider": provider,
                     "data_type": "ticks", "timezone": "UTC",
+                    "source_timezone": (
+                        month_details[0].get("source_timezone", "UTC")
+                        if month_details and len({m.get("source_timezone", "UTC") for m in month_details}) == 1
+                        else ("mixed" if month_details else "UTC")
+                    ),
                     "coverage_start": first, "coverage_end": last,
                     "partitions": partitions, "row_total": row_total,
                     "months": [d["month"] for d in month_details],
@@ -675,6 +1001,59 @@ def build_catalog(root: str | Path = DEFAULT_CACHE_ROOT) -> dict:
                     "partial_months": [d["month"] for d in month_details if d["completeness"] == "partial"],
                     "aggregate_references_included": False,
                 }
+    # Candle-only datasets (OHLC markets such as crypto). Stored separately
+    # from ticks and never mixed with tick partitions.
+    candles_src = root / "candles_src"
+    if candles_src.is_dir():
+        for provider_dir in sorted(candles_src.glob("provider=*")):
+            provider = provider_dir.name.split("=", 1)[1]
+            for symbol_dir in sorted(provider_dir.glob("symbol=*")):
+                symbol = symbol_dir.name.split("=", 1)[1]
+                for tf_dir in sorted(symbol_dir.glob("tf=*")):
+                    timeframe = tf_dir.name.split("=", 1)[1]
+                    year_details = []
+                    first = last = None
+                    partitions = 0
+                    row_total = 0
+                    price_types = set()
+                    for year_dir in sorted(tf_dir.glob("year=*")):
+                        meta = _read_json(year_dir / "metadata.json", {})
+                        if not meta:
+                            continue
+                        partitions += 1
+                        year = int(meta["year"])
+                        row_total += int(meta.get("rows", 0))
+                        price_types.add(str(meta.get("price_type") or "unknown"))
+                        year_details.append({
+                            "month": str(year),
+                            "rows": int(meta.get("rows", 0)),
+                            "first_timestamp": str(meta.get("first_timestamp")),
+                            "last_timestamp": str(meta.get("last_timestamp")),
+                            "completeness": "unknown",
+                            "source_timezone": "UTC",
+                        })
+                        if first is None or str(meta["first_timestamp"]) < first:
+                            first = str(meta["first_timestamp"])
+                        if last is None or str(meta["last_timestamp"]) > last:
+                            last = str(meta["last_timestamp"])
+                    if not year_details:
+                        continue
+                    dataset_id = f"{symbol.lower()}_{provider.lower()}_candles_{timeframe}"
+                    datasets[dataset_id] = {
+                        "dataset_id": dataset_id, "symbol": symbol,
+                        "provider": provider, "data_type": "candles",
+                        "base_timeframe": timeframe,
+                        "price_type": (price_types.pop() if len(price_types) == 1 else "mixed"),
+                        "timezone": "UTC", "source_timezone": "UTC",
+                        "coverage_start": first, "coverage_end": last,
+                        "partitions": partitions, "row_total": row_total,
+                        "months": [d["month"] for d in year_details],
+                        "month_details": year_details,
+                        "years": [int(d["month"]) for d in year_details],
+                        "partial_months": [],
+                        "aggregate_references_included": False,
+                    }
+
     doc = {"schema_version": DATA_CACHE_SCHEMA_VERSION,
            "generated_at": datetime.now(timezone.utc).isoformat(),
            "datasets": datasets}
@@ -688,34 +1067,63 @@ def load_catalog(root: str | Path = DEFAULT_CACHE_ROOT) -> dict:
 
 
 def logical_summary(root: str | Path = DEFAULT_CACHE_ROOT,
-                    data_dir: str | Path = DEFAULT_DATA_DIR) -> dict:
-    """Truthful lineage/total accounting: monthly authoritative vs ALL aggregate."""
+                    data_dir: str | Path = DEFAULT_DATA_DIR,
+                    dataset_id: str | None = None) -> dict:
+    """Truthful lineage/total accounting for ONE tick dataset.
+
+    The inventory holds every symbol, so the summary must be tied to a single
+    dataset; when ``dataset_id`` is omitted the tick dataset with the most
+    monthly partitions is used (deterministic, never a mixture of symbols).
+    """
     root = Path(root)
     inv = _read_json(root / "raw_inventory.json", {"files": []}).get("files", [])
     catalog = load_catalog(root).get("datasets", {})
+    if dataset_id:
+        ds = catalog.get(dataset_id, {})
+    else:
+        tick_sets = [d for d in catalog.values()
+                     if d.get("data_type", "ticks") == "ticks"]
+        ds = sorted(
+            tick_sets,
+            key=lambda d: (-int(d.get("partitions") or 0), str(d.get("dataset_id"))),
+        )[0] if tick_sets else {}
+    if ds:
+        inv = [f for f in inv
+               if f.get("symbol") == ds.get("symbol")
+               and f.get("provider") == ds.get("provider")]
     monthly = [f for f in inv if f.get("source_role") == "monthly_partition"]
     aggregates = [f for f in inv if f.get("source_role") == "aggregate_reference"]
-    y2025 = [f for f in monthly if f.get("year") == 2025]
-    y2026 = [f for f in monthly if f.get("year") == 2026]
-    rows_2025 = sum(int(f.get("rows", 0)) for f in y2025)
-    rows_2026 = sum(int(f.get("rows", 0)) for f in y2026)
+    # Every year present is accounted for, not just the two that happened to
+    # exist when this summary was first written.
+    rows_by_year: dict[int, int] = {}
+    parts_by_year: dict[int, int] = {}
+    for f in monthly:
+        year = f.get("year")
+        if year is None:
+            continue
+        rows_by_year[int(year)] = rows_by_year.get(int(year), 0) + int(f.get("rows", 0))
+        parts_by_year[int(year)] = parts_by_year.get(int(year), 0) + 1
     agg_rows = sum(int(f.get("rows", 0)) for f in aggregates)
-    ds = next(iter(catalog.values())) if catalog else {}
     return {
         "logical_dataset_id": ds.get("dataset_id"),
         "symbol": ds.get("symbol"), "provider": ds.get("provider"),
         "data_type": ds.get("data_type"), "timezone": ds.get("timezone"),
         "raw_inventory_files": len(inv),
         "authoritative_monthly_partitions": len(monthly),
-        "monthly_2025_partitions": len(y2025),
-        "monthly_2026_partitions": len(y2026),
-        "rows_2025": rows_2025,
-        "rows_2026": rows_2026,
-        "total_logical_rows": rows_2025 + rows_2026,
+        "monthly_2025_partitions": parts_by_year.get(2025, 0),
+        "monthly_2026_partitions": parts_by_year.get(2026, 0),
+        "rows_2025": rows_by_year.get(2025, 0),
+        "rows_2026": rows_by_year.get(2026, 0),
+        "rows_by_year": dict(sorted(rows_by_year.items())),
+        "partitions_by_year": dict(sorted(parts_by_year.items())),
+        "total_logical_rows": sum(rows_by_year.values()),
         "aggregate_reference_files": len(aggregates),
         "aggregate_rows": agg_rows,
         "aggregate_included_in_logical_total": False,
-        "aggregate_missing_ticks_vs_monthly_2025": rows_2025 - agg_rows,
+        # Only meaningful when an aggregate file is actually present.
+        "aggregate_missing_ticks_vs_monthly_2025": (
+            rows_by_year.get(2025, 0) - agg_rows if aggregates else None
+        ),
         "derived_partitions": ds.get("partitions"),
         "coverage_start": ds.get("coverage_start"),
         "coverage_end": ds.get("coverage_end"),
@@ -742,11 +1150,20 @@ def _resolve_dataset(source: str, symbol: str | None = None,
         provider, sym = ref.split("/", 1)
         for ds in catalog.values():
             if ds["symbol"] == sym.upper() and ds["provider"].upper() == provider.upper():
+                if symbol and ds["symbol"].upper() != symbol.upper():
+                    raise PartitionMissingError(
+                        f"dataset {source!r} is {ds['symbol']}, not {symbol.upper()}"
+                    )
                 return ds
         raise PartitionMissingError(f"no cached dataset for {source!r}")
-    if ref and ref not in ("", "market_data"):
+    explicit_ref = bool(ref and ref not in ("", "market_data"))
+    if explicit_ref:
         for ds in catalog.values():
             if ds["dataset_id"] == ref.lower():
+                if symbol and ds["symbol"].upper() != symbol.upper():
+                    raise PartitionMissingError(
+                        f"dataset {ref!r} is {ds['symbol']}, not {symbol.upper()}"
+                    )
                 return ds
     if symbol:
         matches = [ds for ds in catalog.values() if ds["symbol"] == symbol.upper()]
@@ -754,7 +1171,13 @@ def _resolve_dataset(source: str, symbol: str | None = None,
             return matches[0]
         if len(matches) > 1:
             raise PartitionMissingError(f"ambiguous provider for symbol {symbol}")
-    if len(catalog) == 1:
+        # An explicit symbol/ref must never silently resolve to a different
+        # symbol (especially the only cached dataset, e.g. XAUUSD).
+        raise PartitionMissingError(
+            f"no cached dataset for symbol {symbol!r}"
+            + (f" or dataset {ref!r}" if explicit_ref else "")
+        )
+    if not explicit_ref and len(catalog) == 1:
         return next(iter(catalog.values()))
     raise PartitionMissingError(f"cannot resolve dataset for {source!r}")
 
@@ -837,6 +1260,7 @@ def data_provenance(source: str, *, symbol: str | None = None, timeframe: str | 
         "symbol": ds.get("symbol"), "timeframe": timeframe,
         "requested_start": start, "requested_end": end,
         "coverage_start": ds.get("coverage_start"), "coverage_end": ds.get("coverage_end"),
+        "source_timezone": ds.get("source_timezone", "UTC"),
         "tick_cache_schema": DATA_CACHE_SCHEMA_VERSION,
         "candle_cache_schema": CANDLE_CACHE_SCHEMA_VERSION,
         "candle_builder_version": CANDLE_BUILDER_VERSION,
@@ -860,6 +1284,7 @@ def load_ticks_frame(
     end: str | None = None,
     root: str | Path = DEFAULT_CACHE_ROOT,
     columns: list[str] | None = None,
+    limit: int | None = None,
 ) -> pd.DataFrame:
     """Load the canonical tick frame for an inclusive calendar-date ``[start, end]``.
 
@@ -868,6 +1293,8 @@ def load_ticks_frame(
     (default: timestamp,bid,ask,bid_volume,ask_volume) — identical to the
     verified CSV parse. ``columns`` projects a smaller execution frame when the
     caller does not need every column (the Parquet store stays complete).
+    ``limit`` is for bounded read-only previews; it stops reading partitions as
+    soon as enough rows are collected and never changes the cached data.
     """
     out_cols = list(columns) if columns else ["timestamp", "bid", "ask", "bid_volume", "ask_volume"]
     read_cols = list(dict.fromkeys(out_cols + ["timestamp", "source_row"]))
@@ -878,6 +1305,11 @@ def load_ticks_frame(
         raise CoverageError(
             f"requested range {start}..{end} is outside cached coverage "
             f"{ds.get('coverage_start')}..{ds.get('coverage_end')}"
+        )
+    if limit is not None:
+        return _load_ticks_limited(
+            ds, start_ts, end_exclusive, months, out_cols, read_cols,
+            int(limit), root, start, end,
         )
     # Preallocate one contiguous frame (bounded peak) instead of N frames + concat
     # or Arrow-table concatenation, both of which hold multiple full-year copies.
@@ -927,6 +1359,252 @@ def load_ticks_frame(
     if not frame.index.equals(pd.RangeIndex(len(frame))):
         frame.reset_index(drop=True, inplace=True)
     return frame
+
+
+def validate_range(source: str, *, symbol: str | None = None,
+                     start: str | None = None, end: str | None = None,
+                     root: str | Path = DEFAULT_CACHE_ROOT,
+                     frame: "pd.DataFrame | None" = None):
+    """Validate a cached range using per-partition cached reports.
+
+    Each overlapping monthly partition is validated at most once: the report
+    is cached in ``validation.json`` keyed by the partition fingerprint, so
+    repeat runs reuse it. Partition reports combine via
+    :func:`src.tick_validation.combine_partition_reports`; only the seams
+    (last row of one partition vs first row of the next, plus the requested
+    range edges) are checked on the live frame. Uncached/changed partitions
+    are validated from Parquet on demand (bounded to that partition only).
+
+    ``frame`` is the already-loaded tick frame for the range (avoids a second
+    Parquet read); when omitted it is loaded here.
+    """
+    from src import tick_validation as _tv
+
+    ds = _resolve_dataset(source, symbol=symbol, root=root)
+    start_ts, end_exclusive = resolve_range(start, end)
+    months = _months_between(start_ts, end_exclusive, ds.get("months", []))
+    if not months:
+        raise CoverageError(
+            f"requested range {start}..{end} is outside cached coverage "
+            f"{ds.get('coverage_start')}..{ds.get('coverage_end')}"
+        )
+    if frame is None:
+        frame = load_ticks_frame(source, symbol=symbol, start=start, end=end, root=root,
+                                 columns=["timestamp", "bid", "ask"])
+    reports = []
+    # Run-frame row offset per month: cached reports carry partition-local
+    # rows, so shift them to run-frame positions for honest samples. Slice
+    # lengths come from the live frame (exact), never from metadata.
+    ts_all = frame["timestamp"]
+    pos = 0
+    for label in months:
+        year, month = (int(x) for x in label.split("-"))
+        pid = PartitionId(ds["provider"], ds["symbol"], year, month)
+        m_start = pd.Timestamp(year=year, month=month, day=1, tz="UTC")
+        m_end = m_start + pd.offsets.MonthBegin(1)
+        full = ((start_ts is None or start_ts <= m_start)
+                and (end_exclusive is None or end_exclusive >= m_end))
+        slen = int(((ts_all >= m_start) & (ts_all < m_end)).sum())
+        if full and slen == int((_read_json(partition_metadata(root, pid), {})
+                                 .get("rows", -1))):
+            meta = _read_json(partition_metadata(root, pid), {})
+            fp = _tick_partition_fingerprint(meta) if meta else None
+            cached = read_partition_validation(root, pid, fp)
+            if cached is not None:
+                rep = _tv.ValidationReport.from_dict(cached["report"])
+            else:
+                part = load_ticks_frame(source, symbol=symbol,
+                                        start=f"{year}-{month:02d}-01",
+                                        end=_month_end_exclusive(year, month),
+                                        root=root, columns=["timestamp", "bid", "ask"])
+                rep = _tv.validate_ticks(part)
+                if fp:
+                    write_partition_validation(root, pid, fp, rep)
+            _shift_report_rows(rep, pos)
+            reports.append(rep)
+        else:
+            # Edge (or filtered) month: validate the live slice directly.
+            # Small; keeps run-frame positions so samples stay exact. Never
+            # cached — the cache only holds whole-partition reports.
+            sl = frame[(ts_all >= m_start) & (ts_all < m_end)]
+            reports.append(_tv.validate_ticks(sl))
+        pos += slen
+    combined = _tv.combine_partition_reports(reports)
+    _check_seams(frame, combined)
+    _check_range_edges(frame, start_ts, end_exclusive, combined)
+    return combined
+
+
+def _shift_report_rows(rep, offset: int) -> None:
+    """Shift integer row references in a cached report to run-frame positions."""
+    if not offset:
+        return
+    for rows in rep.samples.values():
+        for s in rows:
+            for key in ("row", "from_row", "to_row"):
+                if key in s and isinstance(s[key], int):
+                    s[key] = s[key] + offset
+
+
+def _month_end_exclusive(year: int, month: int) -> str:
+    # Full datetime (not date-only): resolve_range() extends date-only ends
+    # by a day, which would overlap the next month's partition and
+    # double-count its first day. The T00:00:00 form is used as-is (exclusive).
+    if month == 12:
+        return f"{year + 1}-01-01T00:00:00"
+    return f"{year}-{month + 1:02d}-01T00:00:00"
+
+
+def _check_seams(frame: "pd.DataFrame", report) -> None:
+    """Seam intervals between consecutively stored partitions (O(months)).
+
+    Inside-partition stats come from the cached per-partition reports, but
+    each partition's own ``diff()`` drops its first row — so the joint
+    intervals (last row of one partition -> first row of the next) exist in
+    neither report. They are counted here exactly like any other interval:
+    positive joints join gap_count/max/samples, negative joints are unsorted,
+    equal joints are cross-partition duplicates.
+    """
+    import numpy as _np
+
+    ts = frame["timestamp"]
+    if len(ts) < 2:
+        return
+    # Integer month codes (vectorized, no strftime): joints are where the
+    # month flips between consecutively stored partitions.
+    ym = ts.dt.year.to_numpy() * 12 + ts.dt.month.to_numpy()
+    joints = _np.flatnonzero(ym[1:] != ym[:-1]) + 1
+    from src import tick_validation as _tv
+
+    bad_order = 0
+    dup_groups = 0
+    dup_rows = 0
+    seam_gaps: list[dict] = []
+    for j in joints.tolist():
+        a = ts.iloc[j - 1]
+        b = ts.iloc[j]
+        if pd.isna(a) or pd.isna(b):
+            continue
+        if b < a:
+            bad_order += 1
+        elif b == a:
+            dup_groups += 1
+            dup_rows += 2
+        else:
+            secs = (b - a).total_seconds()
+            seam_gaps.append({
+                "from_row": _tv__index_value(frame.index, j - 1),
+                "to_row": _tv__index_value(frame.index, j),
+                "from_timestamp": str(a),
+                "to_timestamp": str(b),
+                "seconds": float(secs),
+            })
+    if seam_gaps:
+        report.validation["gap_count"] = int(report.validation["gap_count"]) + len(seam_gaps)
+        seam_max = max(g["seconds"] for g in seam_gaps)
+        report.validation["gap_max_seconds"] = max(
+            float(report.validation["gap_max_seconds"]), seam_max)
+        report.validation["interval_max_seconds"] = max(
+            float(report.validation["interval_max_seconds"]), seam_max)
+        merged = list(report.samples.get("gap", [])) + seam_gaps
+        merged.sort(key=lambda s: float(s.get("seconds", 0.0)), reverse=True)
+        report.samples["gap"] = merged[: _tv.MAX_SAMPLES]
+        # Refresh the interval warning so its count/max match the run frame.
+        top = report.samples["gap"][0]
+        report.warnings = [w for w in report.warnings
+                           if "inter-tick intervals reported" not in w]
+        report.warnings.append(
+            f"inter-tick intervals reported: {report.validation['gap_count']} positive interval(s); "
+            f"max {_tv._fmt_seconds(float(report.validation['gap_max_seconds']))} "
+            f"({top['from_timestamp']} -> {top['to_timestamp']}, "
+            f"rows {top['from_row']}-> {top['to_row']})"
+        )
+    if bad_order:
+        report.validation["unsorted_pairs"] = int(report.validation["unsorted_pairs"]) + bad_order
+        report.warnings.append(
+            f"unsorted timestamps across partition seams: {bad_order} joint(s)"
+        )
+    if dup_groups:
+        report.validation["duplicate_timestamp_groups"] = (
+            int(report.validation["duplicate_timestamp_groups"]) + dup_groups)
+        report.validation["duplicate_timestamp_rows"] = (
+            int(report.validation["duplicate_timestamp_rows"]) + dup_rows)
+
+
+def _tv__index_value(index, pos: int):
+    value = index[pos]
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _check_range_edges(frame: "pd.DataFrame", start_ts, end_exclusive, report) -> None:
+    """Range-edge gaps (requested start/end vs actual coverage) as warnings."""
+    if len(frame) == 0:
+        return
+    first = frame["timestamp"].iloc[0]
+    last = frame["timestamp"].iloc[-1]
+    if start_ts is not None and first > start_ts:
+        gap = (first - start_ts).total_seconds()
+        report.warnings.append(
+            f"requested start {start_ts} has no ticks until {first} ({gap:.1f}s gap)"
+        )
+    if end_exclusive is not None and last < end_exclusive - pd.Timedelta(microseconds=1):
+        gap = (end_exclusive - last).total_seconds()
+        report.warnings.append(
+            f"requested end {end_exclusive} has no ticks after {last} ({gap:.1f}s gap)"
+        )
+
+
+def _load_ticks_limited(
+    ds: dict,
+    start_ts,
+    end_exclusive,
+    months: list[str],
+    out_cols: list[str],
+    read_cols: list[str],
+    limit: int,
+    root: str | Path,
+    start: str | None,
+    end: str | None,
+) -> pd.DataFrame:
+    """Bounded tick read for previews: stop after ``limit`` matching rows."""
+    if limit <= 0:
+        raise ValueError("limit must be > 0")
+    remaining = limit
+    frames = []
+    for label in months:
+        year, month = (int(x) for x in label.split("-"))
+        pid = PartitionId(ds["provider"], ds["symbol"], year, month)
+        parquet = partition_parquet(root, pid)
+        if not parquet.is_file():
+            raise PartitionMissingError(f"required partition missing: {pid.label}")
+        pf = pq.ParquetFile(parquet)
+        for batch in pf.iter_batches(
+            batch_size=max(1, min(remaining, 4096)), columns=read_cols
+        ):
+            frame = batch.to_pandas()
+            frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
+            if start_ts is not None:
+                frame = frame[frame["timestamp"] >= start_ts]
+            if end_exclusive is not None:
+                frame = frame[frame["timestamp"] < end_exclusive]
+            if frame.empty:
+                continue
+            take = min(len(frame), remaining)
+            frames.append(frame.iloc[:take])
+            remaining -= take
+            if remaining <= 0:
+                break
+        if remaining <= 0:
+            break
+    if not frames:
+        raise CoverageError(f"no cached ticks in {ds.get('dataset_id')} for {start}..{end}")
+    frame = pd.concat(frames, ignore_index=True)
+    if "source_row" in frame.columns:
+        frame.drop(columns=["source_row"], inplace=True)
+    return frame.reset_index(drop=True)
 
 
 # Back-compat alias used by the run boundary.
@@ -1305,10 +1983,11 @@ def prepared_timeframes(source: str, *, symbol: str | None = None,
 
 
 def benchmark(data_dir: str | Path = DEFAULT_DATA_DIR, root: str | Path = DEFAULT_CACHE_ROOT,
-              *, month: str = "2025-01", range_start: str = "2025-03-17",
-              range_end: str = "2025-05-08", repeats: int = 2) -> dict:
+              *, symbol: str = "XAUUSD", provider: str = "DUKAS", month: str = "2025-01",
+              range_start: str = "2025-03-17", range_end: str = "2025-05-08",
+              repeats: int = 2) -> dict:
     base = Path(data_dir)
-    month_path = base / f"XAUUSD_DUKAS_{month.replace('-', '_')}_ticks.csv"
+    month_path = base / f"{symbol}_{provider}_{month.replace('-', '_')}_ticks.csv"
     out: dict = {"month": month, "range": [range_start, range_end], "repeats": repeats}
     if month_path.is_file():
         times = []
@@ -1323,7 +2002,7 @@ def benchmark(data_dir: str | Path = DEFAULT_DATA_DIR, root: str | Path = DEFAUL
         out["csv_month_seconds"] = round(min(times), 3)
         out["csv_month_rows"] = rows
     try:
-        ds = _resolve_dataset("cache:", symbol="XAUUSD", root=root)
+        ds = _resolve_dataset("cache:", symbol=symbol, root=root)
         pid_month = month.split("-")
         pid = PartitionId(ds["provider"], ds["symbol"], int(pid_month[0]), int(pid_month[1]))
         parquet = partition_parquet(root, pid)
@@ -1358,7 +2037,7 @@ def benchmark(data_dir: str | Path = DEFAULT_DATA_DIR, root: str | Path = DEFAUL
         rows_pq = 0
         for _ in range(repeats):
             t0 = time.perf_counter()
-            frame = load_ticks_frame("cache:", symbol="XAUUSD", start=range_start, end=range_end, root=root)
+            frame = load_ticks_frame("cache:", symbol=symbol, start=range_start, end=range_end, root=root)
             rows_pq = len(frame)
             times.append(time.perf_counter() - t0)
         out["parquet_range_seconds"] = round(min(times), 3)
@@ -1377,9 +2056,17 @@ def golden_january(data_dir: str | Path = DEFAULT_DATA_DIR, root: str | Path = D
     """CSV vs Parquet parity for the verified January golden reference."""
     from src import run_backtest, run_request  # local import: avoid cycles
 
-    csv_source = str(Path(data_dir) / "XAUUSD_DUKAS_2025_01_ticks.csv")
-    if not Path(csv_source).is_file():
-        raise RawDataMissingError(f"missing January source: {csv_source}")
+    # Resolve through discovery so the raw file may live in any folder layout
+    # (flat or per-symbol); only the partition identity matters.
+    january = [
+        path for path, pid in discover_partitions(data_dir)
+        if pid.symbol == "XAUUSD" and pid.year == 2025 and pid.month == 1
+    ]
+    if not january:
+        raise RawDataMissingError(
+            f"missing January 2025 XAUUSD source under {Path(data_dir)}"
+        )
+    csv_source = str(january[0])
 
     def run(source: str):
         req = run_request.BacktestRunRequest(
@@ -1430,7 +2117,10 @@ def _cmd_inventory(args) -> int:
 
 
 def _cmd_build(args) -> int:
-    results = build_all(args.data, args.root, month=args.month, force=args.force)
+    results = build_all(
+        args.data, args.root, month=args.month, force=args.force,
+        allow_source_change=getattr(args, "accept_source_change", False),
+    )
     built = sum(1 for r in results if r["status"] == "BUILT")
     hit = sum(1 for r in results if r["status"] == "CACHE HIT")
     for r in results:
@@ -1518,6 +2208,10 @@ def main(argv: list[str] | None = None) -> int:
     p_build.add_argument("--month", help="only this YYYY-MM")
     p_build.add_argument("--all", action="store_true", help="build every available partition (default)")
     p_build.add_argument("--force", action="store_true", help="rebuild even if unchanged")
+    p_build.add_argument(
+        "--accept-source-change", action="store_true", dest="accept_source_change",
+        help="allow rebuilding a partition whose raw file changed (records the new fingerprint)",
+    )
     p_build.set_defaults(fn=_cmd_build)
 
     p_verify = sub.add_parser("verify", help="exact CSV<->Parquet partition verification")
