@@ -30,9 +30,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from scripts.e2e_run_switch import e2e_main
+from scripts.e2e_common import e2e_main
 
-from scripts.e2e_run_switch import CDP, TEXT_JS, WAIT_SEL_JS, WAIT_TEXT_JS, launch_chrome, wait_debugger  # noqa: E402
+from scripts.e2e_common import CDP, TEXT_JS, WAIT_SEL_JS, WAIT_TEXT_JS, launch_chrome, wait_debugger  # noqa: E402
 
 os.environ.setdefault("no_proxy", "127.0.0.1,localhost")
 os.environ.setdefault("NO_PROXY", "127.0.0.1,localhost")
@@ -142,7 +142,7 @@ def part2(app: str, chrome_port: int, runs_dir: Path) -> None:
         check("app hydrates with a run", hydrated,
               (cdp.evaluate("(document.body.textContent||'').slice(0,140)") or "")
               + " | console:" + "; ".join(cdp.console_errors[:2]))
-        check("archived run badge", cdp.evaluate(f"({WAIT_TEXT_JS})(['.demo-badge','ARCHIVED RUN'])"))
+        check("archived run badge", cdp.evaluate(f"({WAIT_TEXT_JS})(['.run-badge','ARCHIVED RUN'])"))
         check("bridge connected", cdp.evaluate(f"({WAIT_TEXT_JS})(['.engine','Connected'])"))
 
         # Wait for the price chart to render real candles.

@@ -16,13 +16,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from scripts.e2e_run_switch import e2e_main
+from scripts.e2e_common import e2e_main
 
 os.environ.setdefault("no_proxy", "127.0.0.1,localhost")
 os.environ.setdefault("NO_PROXY", "127.0.0.1,localhost")
 _opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
-from scripts.e2e_run_switch import CDP, TEXT_JS, WAIT_SEL_JS, launch_chrome, wait_debugger  # noqa: E402
+from scripts.e2e_common import CDP, TEXT_JS, WAIT_SEL_JS, launch_chrome, wait_debugger  # noqa: E402
 
 APP = "http://127.0.0.1:5173/"
 BRIDGE = "http://127.0.0.1:8765"

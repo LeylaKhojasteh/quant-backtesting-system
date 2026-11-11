@@ -15,13 +15,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from scripts.e2e_run_switch import e2e_main, launch_bridge, require_bridge_port_free
+from scripts.e2e_common import e2e_main, launch_bridge, require_bridge_port_free
 
-from scripts.e2e_run_switch import CDP, WAIT_SEL_JS, launch_chrome, wait_debugger  # noqa: E402
+from scripts.e2e_common import CDP, WAIT_SEL_JS, launch_chrome, wait_debugger  # noqa: E402
 
 APP = "http://127.0.0.1:5173/"
 BRIDGE = "http://127.0.0.1:8765"
-DATA = ROOT / "data" / "XAUUSD_DUKAS_2025_01_ticks.csv"
+DATA = ROOT / "data" / "XAUUSD" / "XAUUSD_DUKAS_2025_01_ticks.csv"
 
 MAPPINGS = [
     ("1 minute (M1)", "1min"),

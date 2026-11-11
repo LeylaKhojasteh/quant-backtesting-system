@@ -26,9 +26,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from scripts.e2e_run_switch import e2e_main, launch_bridge, require_bridge_port_free
+from scripts.e2e_common import e2e_main, launch_bridge, require_bridge_port_free
 
-from scripts.e2e_run_switch import (  # noqa: E402
+from scripts.e2e_common import (  # noqa: E402
     CDP, TEXT_JS, WAIT_BADGE_JS, WAIT_SEL_JS, WAIT_TEXT_JS, launch_chrome, wait_debugger,
 )
 

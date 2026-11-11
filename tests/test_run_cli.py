@@ -51,6 +51,7 @@ class RunCliTest(unittest.TestCase):
     def _run(self, *extra, run_id="run_cli"):
         return run_backtest.main([
             "--data", str(self.data),
+            "--symbol", "XAUUSD",
             "--out", str(self.runs),
             "--run-id", run_id,
             "--public", str(self.public),
@@ -64,6 +65,15 @@ class RunCliTest(unittest.TestCase):
         return json.loads((Path(directory) / "config.json").read_text(encoding="utf-8"))
 
     # ---- existing workflow ------------------------------------------------
+
+    def test_non_positive_stop_or_take_is_rejected(self):
+        with self.assertRaises(SystemExit):
+            run_backtest.main([
+                "--data", str(self.data),
+                "--symbol", "XAUUSD",
+                "--out", str(self.runs),
+                "--stop-distance", "0",
+            ])
 
     def test_builtin_candle_direction_without_publish(self):
         directory = Path(self._run())
@@ -95,6 +105,7 @@ class RunCliTest(unittest.TestCase):
         with self.assertRaises(StrategyLoadError):
             run_backtest.main([
                 "--data", str(self.root / "missing.csv"),
+                "--symbol", "XAUUSD",
                 "--out", str(self.runs),
                 "--strategy", str(bad),
                 "--run-id", "run_bad",
@@ -105,6 +116,7 @@ class RunCliTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             run_backtest.main([
                 "--data", str(self.data),
+                "--symbol", "XAUUSD",
                 "--out", str(self.runs),
                 "--no-report", "--publish",
             ])
@@ -117,13 +129,16 @@ class RunCliTest(unittest.TestCase):
             "--stop-distance", "7", "--take-profit-distance", "14",
         ))
         config = self._config(directory)
-        self.assertEqual(set(config), {"run_id", "strategy", "market", "execution"})
+        self.assertEqual(set(config), {"run_id", "strategy", "market", "execution", "instrument"})
+        self.assertEqual(config["instrument"]["symbol"], "XAUUSD")
+        self.assertEqual(config["instrument"]["digits"], 2)
         # candle_direction is fixed logic: no strategy parameters.
         self.assertEqual(config["strategy"]["parameters"], {})
         self.assertEqual(config["strategy"]["selector"], "candle_direction")
         self.assertEqual(config["strategy"]["file"], None)
         self.assertEqual(config["market"]["symbol"], "XAUUSD")
         self.assertEqual(config["market"]["timeframe"], "15min")
+        self.assertEqual(config["market"]["source_timezone"], "UTC")
         self.assertEqual(config["market"]["data_fingerprint"],
                          self._result(directory)["config"]["data_fingerprint"])
         self.assertEqual(config["execution"],

@@ -9,7 +9,9 @@ A strategy creates signals and nothing else:
 - ``configure(effective)`` / ``effective_parameters()`` — receive the validated
   effective parameter values for a run.
 - ``generate_signals(candles)`` — normalized signal DataFrame with columns
-  ``signal_candle_start``, ``signal_available_time``, ``direction``.
+  ``signal_candle_start``, ``signal_available_time``, ``direction``, plus the
+  optional per-signal ``stop_distance`` / ``take_profit_distance`` (positive
+  price distances or null; null falls back to the run-level SL/TP).
 
 The strategy must NOT execute trades, calculate portfolio results, modify
 market data, or know frontend logic. Execution belongs to ``src.backtest``
@@ -26,6 +28,29 @@ from __future__ import annotations
 
 
 SIGNAL_COLUMNS = ["signal_candle_start", "signal_available_time", "direction"]
+#: Optional per-signal execution levels. When a strategy supplies them, the
+#: engine prefers them over the run-level SL/TP; when a signal omits them
+#: (or they are null), the run-level values apply.
+#: - ``stop_distance`` / ``take_profit_distance``: positive price distances.
+#: - ``trail_distance``: positive price distance for a simple trailing stop.
+#: - ``max_holding_seconds``: positive seconds for a time exit.
+POSITIVE_SIGNAL_COLUMNS = (
+    "stop_distance",
+    "take_profit_distance",
+    "trail_distance",
+    "trail_after_distance",
+    "trail_step",
+    "breakeven_after_distance",
+    "max_holding_seconds",
+    "size_multiplier",
+)
+#: ``breakeven_offset`` may be zero (exact entry) but never negative.
+NON_NEGATIVE_SIGNAL_COLUMNS = ("breakeven_offset",)
+OPTIONAL_SIGNAL_COLUMNS = POSITIVE_SIGNAL_COLUMNS + NON_NEGATIVE_SIGNAL_COLUMNS
+
+#: Every column a signal frame may contain. Anything else is a typo or an
+#: unsupported feature, and is rejected instead of being silently ignored.
+KNOWN_SIGNAL_COLUMNS = tuple(SIGNAL_COLUMNS) + OPTIONAL_SIGNAL_COLUMNS
 VALID_DIRECTIONS = ("LONG", "SHORT")
 
 
@@ -109,9 +134,77 @@ def validate_signals(signals) -> list[str]:
     if missing:
         errors.append(f"signals is missing required columns: {missing}")
         return errors
+    # A misspelled optional column would otherwise disable its feature with no
+    # error at all, so unknown columns are rejected explicitly.
+    unknown = [c for c in list(signals.columns) if c not in KNOWN_SIGNAL_COLUMNS]
+    if unknown:
+        errors.append(
+            f"signals contains unknown columns: {unknown}; "
+            f"allowed columns: {list(KNOWN_SIGNAL_COLUMNS)}"
+        )
     invalid = sorted(set(signals["direction"].unique()) - set(VALID_DIRECTIONS))
     if invalid:
         errors.append(f"signals contains invalid directions: {invalid}")
+    if signals.empty:
+        return errors
+    import pandas as pd
+
+    for col in ("signal_candle_start", "signal_available_time"):
+        series = signals[col]
+        if not pd.api.types.is_datetime64_any_dtype(series):
+            errors.append(f"{col} must be datetime64")
+            continue
+        if series.dt.tz is None:
+            errors.append(f"{col} must be timezone-aware")
+            continue
+        if series.isna().any():
+            errors.append(f"{col} contains NaT")
+    if not errors:
+        if (signals["signal_available_time"] < signals["signal_candle_start"]).any():
+            errors.append("signal_available_time must be >= signal_candle_start")
+    def _values(col):
+        if col not in list(signals.columns):
+            return None
+        return signals[col].tolist()
+
+    import numbers
+
+    def _is_num(v):
+        return isinstance(v, numbers.Real) and v == v
+
+    for col in POSITIVE_SIGNAL_COLUMNS:
+        values = _values(col)
+        if values is None or all(v is None for v in values):
+            continue
+        if any(v is not None and not (_is_num(v) and v > 0) for v in values):
+            errors.append(f"{col} must be a positive number or null")
+
+    for col in NON_NEGATIVE_SIGNAL_COLUMNS:
+        values = _values(col)
+        if values is None or all(v is None for v in values):
+            continue
+        if any(v is not None and not (_is_num(v) and v >= 0) for v in values):
+            errors.append(f"{col} must be zero or a positive number, or null")
+
+    # Dependent options must not be silently ignored: they only make sense
+    # together with the feature they modify.
+    def _has(col, index):
+        values = _values(col)
+        return values is not None and values[index] is not None
+
+    trail = _values("trail_distance")
+    if _values("trail_step") is not None:
+        for index, step in enumerate(_values("trail_step")):
+            if step is not None and (trail is None or trail[index] is None):
+                errors.append("trail_step requires trail_distance on the same signal")
+                break
+    if _values("breakeven_offset") is not None:
+        for index, offset in enumerate(_values("breakeven_offset")):
+            if offset is not None and not _has("breakeven_after_distance", index):
+                errors.append(
+                    "breakeven_offset requires breakeven_after_distance on the same signal"
+                )
+                break
     return errors
 
 
@@ -119,8 +212,10 @@ class _FunctionStrategy(Strategy):
     """Adapter so legacy ``generate_signals`` functions fit the interface.
 
     A function that declares a ``parameters`` keyword (or ``**kwargs``) receives
-    the effective parameters dict; a plain ``generate_signals(candles)``
-    function keeps its current call signature.
+    the effective parameters dict; a function that declares a ``timeframe``
+    keyword (or ``**kwargs``) receives the market timeframe when the caller
+    supplies one. A plain ``generate_signals(candles)`` function keeps its
+    current call signature.
     """
 
     def __init__(
@@ -131,6 +226,7 @@ class _FunctionStrategy(Strategy):
         description: str,
         params: dict,
         passes_parameters: bool = False,
+        passes_timeframe: bool = False,
     ):
         self._fn = fn
         self.name = name
@@ -138,13 +234,19 @@ class _FunctionStrategy(Strategy):
         self.description = description
         self._params = dict(params)
         self._passes_parameters = passes_parameters
+        self._passes_timeframe = passes_timeframe
 
     def parameters(self) -> dict:
         return dict(self._params)
 
-    def generate_signals(self, candles):
+    def generate_signals(self, candles, timeframe=None):
+        kwargs: dict = {}
         if self._passes_parameters:
-            return self._fn(candles, parameters=self.effective_parameters())
+            kwargs["parameters"] = self.effective_parameters()
+        if self._passes_timeframe and timeframe is not None:
+            kwargs["timeframe"] = timeframe
+        if self._passes_parameters or ("timeframe" in kwargs):
+            return self._fn(candles, **kwargs)
         return self._fn(candles)
 
 
@@ -156,6 +258,7 @@ def adapt_strategy(
     description: str = "",
     params: dict | None = None,
     passes_parameters: bool = False,
+    passes_timeframe: bool = False,
 ) -> Strategy:
     """Wrap a legacy ``generate_signals(candles)`` function as a Strategy."""
-    return _FunctionStrategy(fn, name, version, description, params or {}, passes_parameters)
+    return _FunctionStrategy(fn, name, version, description, params or {}, passes_parameters, passes_timeframe)

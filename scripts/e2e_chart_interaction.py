@@ -27,9 +27,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from scripts.e2e_run_switch import e2e_main
+from scripts.e2e_common import e2e_main
 
-from scripts.e2e_run_switch import (  # noqa: E402
+from scripts.e2e_common import (  # noqa: E402
     CDP, TEXT_JS, WAIT_SEL_JS, launch_chrome, wait_debugger,
 )
 
@@ -223,26 +223,18 @@ def main() -> int:
               f"count={v6['count']}")
 
         # --- 5. selecting a trade centers the chart --------------------------
-        centered = cdp.evaluate("""(() => {
-          const rows = document.querySelectorAll('.overview-trade-log tbody tr');
-          if (!rows.length) return 'NO_ROWS';
-          const target = rows[Math.min(3, rows.length - 1)];
-          target.click();
-          return 'CLICKED';
-        })()""")
+        next_clicked = cdp.evaluate(
+            "(()=>{const b=document.querySelector('button[aria-label=\"Next trade\"]');"
+            "if(!b)return 'NO_CONTROL';b.click();return 'CLICKED';})()")
+        time.sleep(0.4)
+        center_clicked = cdp.evaluate(
+            "(()=>{const b=document.querySelector('button[aria-label=\"Center on trade\"]');"
+            "if(!b)return 'NO_CONTROL';b.click();return 'CLICKED';})()")
         time.sleep(0.8)
         v7 = cdp.evaluate(VIEW_JS)
+        centered = 'CLICKED' if next_clicked == 'CLICKED' and center_clicked == 'CLICKED' else 'NO_CONTROL'
         check("selecting a trade moves the viewport", centered == "CLICKED" and v7["start"] != initial_start,
               f"{initial_start} -> {v7['start']}")
-        # The centered window must contain the selected trade's entry time.
-        entry_ms = cdp.evaluate("""(() => {
-          const rows = document.querySelectorAll('.overview-trade-log tbody tr');
-          const i = Math.min(3, rows.length - 1);
-          const cells = rows[i] ? rows[i].querySelectorAll('td') : [];
-          const t = cells[3] ? cells[3].textContent.trim() : '';
-          return t;
-        })()""")
-        print("INFO selected trade entry cell:", entry_ms)
         sel_start, sel_end = v7["start"], v7["end"]
         check("centered viewport brackets the selected trade window",
               bool(sel_start) and bool(sel_end) and sel_start <= sel_end,

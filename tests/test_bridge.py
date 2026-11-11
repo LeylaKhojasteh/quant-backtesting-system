@@ -55,12 +55,12 @@ class BridgeTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
-        self.data = self.root / "ticks.csv"
-        _write_ticks(self.data)
         self.runs = self.root / "runs"
         self.public = self.root / "public"
         self.datadir = self.root / "data"
         self.datadir.mkdir()
+        self.data = self.datadir / "ticks.csv"
+        _write_ticks(self.data)
         (self.datadir / "XAUUSD_DUKAS_2025_01_ticks.csv").write_text(
             "timestamp,bid,ask\n", encoding="utf-8"
         )
@@ -192,6 +192,12 @@ class BridgeTest(unittest.TestCase):
         self.assertEqual(status, 404)
         self.assertEqual(body["error"]["code"], "not_found")
 
+    def test_missing_dataset_tick_preview_has_structured_error(self):
+        status, body, _ = self._get("/datasets/not_a_dataset/ticks?start=2025-01-02&end=2025-01-02")
+        self.assertEqual(status, 404)
+        self.assertEqual(body["error"]["code"], "dataset_unavailable")
+        self.assertTrue(body["error"]["message"])
+
     # ---- runs -------------------------------------------------------------
 
     def test_run_candle_direction(self):
@@ -264,6 +270,16 @@ class BridgeTest(unittest.TestCase):
         ))
         self.assertEqual(status, 400)
         self.assertEqual(body["error"]["code"], "invalid_dataset")
+
+    def test_raw_path_outside_data_dir_is_rejected(self):
+        outside = self.root / "outside.csv"
+        _write_ticks(outside)
+        status, body = self._post("/runs", self._run_payload(
+            selector="candle_direction", data_source=outside,
+        ))
+        self.assertEqual(status, 400)
+        self.assertEqual(body["error"]["code"], "invalid_dataset")
+        self.assertIn("data directory", body["error"]["message"])
 
     def test_invalid_execution_rejected(self):
         payload = self._run_payload(selector="candle_direction")

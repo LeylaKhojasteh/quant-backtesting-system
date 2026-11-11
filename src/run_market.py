@@ -2,7 +2,7 @@
 
 The archived run is authoritative for its own market context: dataset/symbol/
 timeframe/range come from the run archive (``config.json`` + ``result.json``),
-never from the frontend and never from a demo fixture. Real candles/ticks are
+never from the frontend and never from a synthetic fixture. Real candles/ticks are
 then read from the canonical Data Engine cache through bounded window readers.
 
 This module performs **no** research and **no** resampling: it only resolves the

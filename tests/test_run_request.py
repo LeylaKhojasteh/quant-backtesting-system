@@ -179,5 +179,32 @@ class TimeframeContractTest(unittest.TestCase):
                 self.assertNotIn("ValueError", str(ctx.exception))
 
 
+class DatasetProvenanceTest(unittest.TestCase):
+    def test_cache_source_populates_dataset_id(self):
+        from src import run_request
+
+        market = run_request.MarketRequest(
+            "XAUUSD", "15min", "2024-01-02", "2024-01-03", "cache:xauusd_dukas_ticks",
+        )
+        self.assertEqual(market.dataset_id, "xauusd_dukas_ticks")
+
+    def test_explicit_dataset_id_is_never_overwritten(self):
+        from src import run_request
+
+        market = run_request.MarketRequest(
+            "XAUUSD", "15min", "2024-01-02", "2024-01-03",
+            "cache:other_dataset", dataset_id="chosen_dataset",
+        )
+        self.assertEqual(market.dataset_id, "chosen_dataset")
+
+    def test_raw_path_source_leaves_dataset_id_empty(self):
+        from src import run_request
+
+        market = run_request.MarketRequest(
+            "XAUUSD", "15min", "2024-01-02", "2024-01-03", "data/XAUUSD/file.csv",
+        )
+        self.assertIsNone(market.dataset_id)
+
+
 if __name__ == "__main__":
     unittest.main()

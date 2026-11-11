@@ -11,9 +11,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from scripts.e2e_run_switch import e2e_main
+from scripts.e2e_common import e2e_main
 
-from scripts.e2e_run_switch import CDP, launch_chrome, wait_debugger  # noqa: E402
+from scripts.e2e_common import CDP, launch_chrome, wait_debugger  # noqa: E402
 
 APP = "http://127.0.0.1:5173/"
 SIZES = [

@@ -66,12 +66,15 @@ def validate_filename(filename) -> str:
     return name
 
 
-def import_strategy(filename, source, *, strategy_dir: str | Path):
+def import_strategy(filename, source, *, strategy_dir: str | Path, overwrite: bool = False):
     """Validate and atomically store one strategy file.
 
-    Returns ``(strategy, target_path)``. Raises ``StrategyImportError`` (or a
-    subclass) on any rejection; the permanent directory is only written on
-    success, and no temp files remain either way.
+    Returns ``(strategy, target_path, created)`` where ``created`` is True for
+    a new file and False when an existing file was updated in place.
+    Raises ``StrategyImportError`` (or a subclass) on any rejection; the
+    permanent directory is only written on success, and no temp files remain
+    either way. Updating an existing file requires ``overwrite=True`` and
+    then rewrites it atomically instead of raising ``StrategyConflictError``.
     """
     name = validate_filename(filename)
     if not isinstance(source, str):
@@ -87,9 +90,9 @@ def import_strategy(filename, source, *, strategy_dir: str | Path):
     base = Path(strategy_dir)
     base.mkdir(parents=True, exist_ok=True)
     target = base / name
-    if target.exists():
+    if target.exists() and not overwrite:
         raise StrategyConflictError(
-            f"strategy {name!r} already exists; choose another filename"
+            f"strategy {name!r} already exists; confirm overwrite to update it"
         )
 
     # 1) Validate a temporary candidate using the authoritative loader. The
@@ -103,6 +106,7 @@ def import_strategy(filename, source, *, strategy_dir: str | Path):
             raise InvalidStrategyFileError(f"invalid strategy: {exc}") from exc
 
     # 2) Atomic save into the approved directory (same-dir temp + os.replace).
+    created = not target.exists()
     fd, tmp_save = tempfile.mkstemp(prefix=".qbl-save-", suffix=".tmp", dir=str(base))
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
@@ -112,4 +116,4 @@ def import_strategy(filename, source, *, strategy_dir: str | Path):
         Path(tmp_save).unlink(missing_ok=True)
         raise
 
-    return strategy, target
+    return strategy, target, created

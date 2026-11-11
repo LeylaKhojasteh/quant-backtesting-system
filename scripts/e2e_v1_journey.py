@@ -18,9 +18,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from scripts.e2e_run_switch import e2e_main, launch_bridge, require_bridge_port_free
+from scripts.e2e_common import e2e_main, launch_bridge, require_bridge_port_free
 
-from scripts.e2e_run_switch import (  # noqa: E402
+from scripts.e2e_common import (  # noqa: E402
     CDP, TEXT_JS, WAIT_BADGE_JS, WAIT_SEL_JS, WAIT_TEXT_JS, launch_chrome, wait_debugger,
 )
 
@@ -134,10 +134,10 @@ def main() -> int:
         run_id = (re.search(r"Archived Run · (\S+) ·", cdp.evaluate("(document.querySelector('.run-status')||{}).textContent||''") or "") or [None, None])[1]
         ok &= check("result metrics render", cdp.evaluate(f"({WAIT_METRICS_JS})('Total PnL')"))
         ok &= check("price chart renders", cdp.evaluate(f"({WAIT_SEL_JS})('.charts-grid svg')"))
-        ok &= check("trade log renders", cdp.evaluate(f"({WAIT_SEL_JS})('.overview-trade-log tbody tr')"))
+        cdp.evaluate(f"({CLICK_TEXT_JS})(['.navigation button','Trade Inspector'])")
+        ok &= check("trade explorer renders", cdp.evaluate(f"({WAIT_SEL_JS})('.trade-list .trade-row')"))
 
         # trade inspector + timeline chronology
-        cdp.evaluate(f"({CLICK_TEXT_JS})(['.navigation button','Trade Inspector'])")
         ok &= check("trade inspector works", cdp.evaluate(f"({WAIT_SEL_JS})('.focused-inspector')"))
         cdp.evaluate(f"({CLICK_TEXT_JS})(['.detail-tabs button','Timeline'])")
         ok &= check("timeline renders", cdp.evaluate(f"({WAIT_SEL_JS})('.trade-timeline .tt-time')"))

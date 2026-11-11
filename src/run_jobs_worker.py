@@ -210,6 +210,12 @@ def run_spec(spec_path: str) -> dict:
             "loading_candles", "Candles loaded")(data_engine.load_candles_frame)
         run_backtest._load_ticks = stage(  # type: ignore[attr-defined]
             "loading_ticks", "Tick partitions resolved")(run_backtest._load_ticks)
+        # NOTE: run_backtest imports validate_ticks at call time
+        # (`from src.tick_validation import validate_ticks` inside
+        # execute_run), so patching the module attribute takes effect.
+        from src import tick_validation as tick_validation_mod
+        tick_validation_mod.validate_ticks = stage(  # type: ignore[method-assign]
+            "validating_ticks", "Ticks validated")(tick_validation_mod.validate_ticks)
         strategy_loader.generate_validated_signals = stage(  # type: ignore[method-assign]
             "generating_signals", "Signals generated")(
                 strategy_loader.generate_validated_signals)
@@ -269,6 +275,7 @@ def run_spec(spec_path: str) -> dict:
 _START_EVENTS = {
     "loading_ticks": "Loading ticks",
     "loading_candles": "Loading candles",
+    "validating_ticks": "Validating ticks",
     "generating_signals": "Generating signals",
     "executing_engine": "Engine execution started",
     "building_result": "Building result",

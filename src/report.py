@@ -306,17 +306,25 @@ def render_report(result: dict) -> str:
         ("Timeframe", _esc(cf.get("timeframe"))),
         ("Tested range (UTC)", _esc(cf.get("start")) + " to " + _esc(cf.get("end"))),
         ("Parameters", _esc(ptxt))])
-    data = "".join(f"<dt>{k}</dt><dd>{v}</dd>" for k, v in [
+    data_rows = [
         ("Data source", _esc(dq.get("data_source") or cf.get("data_source"))),
-        ("Tick count", _num(dq.get("tick_count"), 0)),
+        # Candle datasets have no ticks; None renders as N/A, never a fake zero.
+        ("Tick count", _num(dq.get("tick_count"))),
         ("Candle count", _num(dq.get("candle_count"), 0)),
-        ("Signals received", _num(ex.get("signals_received"), 0)),
+        ("Signals received", _num(ex.get("signals_received"))),
         ("Signals executed", _num(ex.get("signals_executed"), 0)),
-        ("Signals ignored", _num(ex.get("signals_ignored"), 0)),
+        ("Signals ignored", _num(ex.get("signals_ignored"))),
         ("Engine", _esc(ex.get("engine") or "src.backtest")),
         ("Execution model", _esc(ex.get("execution_model") or "engine")),
+        ("Max concurrent positions", _num(ex.get("max_concurrent_positions"))),
+    ]
+    if ex.get("ambiguous_exits") is not None:
+        data_rows.append(
+            ("Ambiguous exits (bar order unknown)", _num(ex.get("ambiguous_exits"))))
+    data_rows.append(
         ("Engine window (UTC)",
-         _esc(ex.get("started_at")) + " to " + _esc(ex.get("finished_at")))])
+         _esc(ex.get("started_at")) + " to " + _esc(ex.get("finished_at"))))
+    data = "".join(f"<dt>{k}</dt><dd>{v}</dd>" for k, v in data_rows)
     val = dq.get("validation") or {}
     wlist = dq.get("warnings", []) or []
     warn = ("<ul class='muted'>" + "".join(f"<li class='bad'>{_esc(x)}</li>" for x in wlist)

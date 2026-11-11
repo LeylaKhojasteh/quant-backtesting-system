@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "instruments": {
+    "XAUUSD": {
+      "symbol": "XAUUSD",
+      "asset_class": "metal",
+      "quote_currency": "USD",
+      "contract_size": 100.0,
+      "tick_size": 0.01,
+      "pip_size": 0.01,
+      "digits": 2,
+      "price_scale": 0.01,
+      "session": "24x5",
+      "leverage": null,
+      "margin_rate": null,
+      "swap": null
+    },
+    "EURUSD": {
+      "symbol": "EURUSD",
+      "asset_class": "fx",
+      "quote_currency": "USD",
+      "contract_size": 100000.0,
+      "tick_size": 0.00001,
+      "pip_size": 0.0001,
+      "digits": 5,
+      "price_scale": 0.00001,
+      "session": "24x5",
+      "leverage": null,
+      "margin_rate": null,
+      "swap": null
+    },
+    "GBPUSD": {
+      "symbol": "GBPUSD",
+      "asset_class": "fx",
+      "quote_currency": "USD",
+      "contract_size": 100000.0,
+      "tick_size": 0.00001,
+      "pip_size": 0.0001,
+      "digits": 5,
+      "price_scale": 0.00001,
+      "session": "24x5",
+      "leverage": null,
+      "margin_rate": null,
+      "swap": null
+    },
+    "USDJPY": {
+      "symbol": "USDJPY",
+      "asset_class": "fx",
+      "quote_currency": "JPY",
+      "contract_size": 100000.0,
+      "tick_size": 0.001,
+      "pip_size": 0.01,
+      "digits": 3,
+      "price_scale": 0.001,
+      "session": "24x5",
+      "leverage": null,
+      "margin_rate": null,
+      "swap": null
+    },
+    "BTCUSDT": {
+      "symbol": "BTCUSDT",
+      "asset_class": "crypto",
+      "quote_currency": "USDT",
+      "contract_size": 1.0,
+      "tick_size": 0.01,
+      "pip_size": null,
+      "digits": 2,
+      "price_scale": 0.01,
+      "session": "24x7",
+      "leverage": null,
+      "margin_rate": null,
+      "swap": null
+    }
+  }
+}

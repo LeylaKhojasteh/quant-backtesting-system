@@ -30,22 +30,26 @@ from pathlib import Path
 #: closed, the producer model is recorded, and raw strategy reasons are kept.
 CONTRACT_VERSION = "1.1"
 
-#: Engine-owned exits: TP | SL | EOD (canonical, unchanged).
-ENGINE_EXIT_REASONS = ("TP", "SL", "EOD")
+#: Engine-owned exits: TP | SL | TSL (trailing) | BE (break-even stop) |
+#: TIME (time exit) | EOD.
+ENGINE_EXIT_REASONS = ("TP", "SL", "TSL", "BE", "TIME", "EOD")
 
 #: Full closed enum. ``STRATEGY`` covers any strategy-owned exit reason; the
 #: original text is preserved in ``TradeRecord.exit_reason_detail`` so nothing
 #: is silently relabeled (e.g. ``opposite_breakout`` stays inspectable).
-EXIT_REASONS = ("TP", "SL", "EOD", "STRATEGY")
+EXIT_REASONS = ("TP", "SL", "TSL", "BE", "TIME", "EOD", "STRATEGY")
 
 #: Who produced the trades: ``engine`` (tick engine, default, backward
 #: compatible) or ``strategy`` (strategy-owned execution).
-EXECUTION_MODELS = ("engine", "strategy")
+EXECUTION_MODELS = ("engine", "strategy", "candle")
 
 # Engine emits "END_OF_DATA" for a position closed at the end of the data.
 # The contract canonicalizes it to "EOD" so engine output, stored runs and
 # the UI vocabulary stay identical. The engine itself is not modified.
-ENGINE_EXIT_REASON_MAP = {"TP": "TP", "SL": "SL", "END_OF_DATA": "EOD"}
+ENGINE_EXIT_REASON_MAP = {
+    "TP": "TP", "SL": "SL", "TSL": "TSL", "BE": "BE", "TIME": "TIME",
+    "END_OF_DATA": "EOD",
+}
 
 # Strategy-owned exit reasons canonicalized to the closed enum. Unknown
 # tokens fall through to ``STRATEGY`` with the raw text preserved.
@@ -55,6 +59,8 @@ STRATEGY_EXIT_REASON_MAP = {
     "TAKE_PROFIT": "TP",
     "TAKE_PROFIT_GAP": "TP",
     "END_OF_DATA": "EOD",
+    "BREAKEVEN": "BE",
+    "BREAK_EVEN": "BE",
 }
 
 END_OF_DATA_REASONS = {"END_OF_DATA", "end_of_data", "EOD"}
@@ -120,6 +126,9 @@ class TradeRecord:
     #: engine-owned trades (whose canonical reason is self-describing) and
     #: for every archive written before this field existed.
     exit_reason_detail: str | None = None
+    #: Per-trade size multiplier (default 1.0). Scales account economics
+    #: only; price-term fields are always per unit and never scaled.
+    size_multiplier: float = 1.0
 
 
 @dataclass
@@ -176,6 +185,12 @@ class ExecutionInfo:
     #: Who produced the trades: ``engine`` (default, every archive before this
     #: field existed) or ``strategy`` (strategy-owned execution).
     execution_model: str = "engine"
+    #: Observed maximum number of simultaneously open positions. A measurement
+    #: of what the run did, never a configured limit (legacy runs: None).
+    max_concurrent_positions: int | None = None
+    #: Candle model only: trades whose stop and target were both touched in the
+    #: same bar, so the exit order is unknown (None for tick/strategy runs).
+    ambiguous_exits: int | None = None
 
 
 @dataclass
@@ -286,7 +301,7 @@ def canonicalize_strategy_exit_reason(raw: object) -> tuple[str, str | None]:
     """
     text = "" if raw is None else str(raw).strip()
     upper = text.upper()
-    if upper in ("TP", "SL", "EOD"):
+    if upper in ("TP", "SL", "TSL", "BE", "TIME", "EOD"):
         return upper, None
     if upper in END_OF_DATA_REASONS:
         return "EOD", None
@@ -348,6 +363,17 @@ def _iso(value) -> str:
     return text.replace("+00:00", "Z") if text.endswith("+00:00") else text
 
 
+def _positive_multiplier(value) -> float:
+    """Per-trade size multiplier: missing/null/invalid stays 1.0, never zero."""
+    if value is None:
+        return 1.0
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 1.0
+    return number if number == number and number > 0 else 1.0
+
+
 def _optional_float(value) -> float | None:
     """Optional numeric engine column: missing/NaN stays None, never zero."""
     if value is None:
@@ -391,6 +417,7 @@ def trades_from_engine(trades_df) -> list[TradeRecord]:
                 spread_at_exit=float(row["spread_at_exit"]),
                 mae=_optional_float(row.get("mae")),
                 mfe=_optional_float(row.get("mfe")),
+                size_multiplier=_positive_multiplier(row.get("size_multiplier")),
             )
         )
     return records

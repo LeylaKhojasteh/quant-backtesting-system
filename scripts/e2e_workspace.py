@@ -19,27 +19,26 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from scripts.e2e_run_switch import e2e_main, launch_bridge, require_bridge_port_free
+from scripts.e2e_common import e2e_main, launch_bridge, require_bridge_port_free
 
-from scripts.e2e_run_switch import (  # noqa: E402
-    CDP, TEXT_JS, WAIT_BADGE_JS, WAIT_SEL_JS, WAIT_TEXT_JS, launch_chrome, wait_debugger,
+from scripts.e2e_common import (  # noqa: E402
+    CDP, OPEN_RUN_JS, TEXT_JS, WAIT_BADGE_JS, WAIT_SEL_JS, WAIT_TEXT_JS, launch_chrome, wait_debugger,
 )
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-APP_URL = "http://127.0.0.1:5173/?fixture=demo"
+APP_URL = "http://127.0.0.1:5173/"
 BRIDGE = "http://127.0.0.1:8765"
 PUBLIC = ROOT / "Quant-Backtest-Lab" / "public"
 MANIFEST = PUBLIC / "adapters-run-manifest.json"
 EMA_PATH = ROOT / "tests" / "fixtures" / "import" / "ema_cross.py"
 EMA_SOURCE = EMA_PATH.read_text(encoding="utf-8")
-DEMO_ENTRY = "2,799.84"
 RUN0001_ENTRY = "2,626.08"
 
 _POLL = "const t0=Date.now();const iv=setInterval(()=>{if(ok()||Date.now()-t0>MAX){clearInterval(iv);res(ok());}},250);"
 WAIT_SOURCE_JS = ("(needle => new Promise(res => {"
-                  " const ok=()=>[...document.querySelectorAll('.run-source button')].some(b=>b.textContent.includes(needle));"
+                  " const ok=()=>((document.querySelector('.source-current')||{}).textContent||'').includes(needle);"
                   " if(ok())return res(true);" + _POLL.replace("MAX", "25000") + "}))")
 WAIT_NEW_RUN_JS = ("(prev => new Promise(res => {"
                    " const ok=()=>{const t=(document.querySelector('.run-status')||{}).textContent||'';"
@@ -49,8 +48,8 @@ WAIT_STATUS_ID_JS = ("(rid => new Promise(res => {"
                      " const ok=()=>(((document.querySelector('.run-status')||{}).textContent)||'').includes(rid);"
                      " if(ok())return res(true);" + _POLL.replace("MAX", "30000") + "}))")
 WAIT_ROW_JS = ("(([text]) => new Promise(res => {"
-               " const ok=()=>{const r=document.querySelector('.overview-trade-log tbody tr');"
-               "  return !!r && r.textContent.includes(text);};"
+               " const ok=()=>{const el=document.querySelector('.run-context-bar');const entry=(el&&el.dataset.firstEntry)||'';"
+               "  return !!entry && entry.includes(text);};"
                " if(ok())return res(true);" + _POLL.replace("MAX", "25000") + "}))")
 WAIT_LIB_JS = ("((runId) => new Promise(res => {"
                " const ok=()=>[...document.querySelectorAll('.lib-row')].some(r=>r.textContent.includes(runId));"
@@ -78,7 +77,7 @@ CLICK_EL_JS = """((sel) => { const el=document.querySelector(sel); if(!el) retur
 CLICK_ARIA_JS = """((label) => { const el=document.querySelector('[aria-label="'+label.replace(/"/g,'\\\\"')+'"]'); if(!el) return 'NO'; for (const t of ['pointerdown','mousedown','mouseup','click']) el.dispatchEvent(new MouseEvent(t,{bubbles:true,cancelable:true,view:window})); return 'OK'; })"""
 CLICK_TEXT_JS = """(([root,text]) => { const el=[...document.querySelectorAll(root)].find(b=>b.textContent.trim()===text||b.textContent.includes(text)); if(!el) return 'NO'; for (const t of ['pointerdown','mousedown','mouseup','click']) el.dispatchEvent(new MouseEvent(t,{bubbles:true,cancelable:true,view:window})); return 'OK'; })"""
 CLICK_RUN_JS = """(() => { const b=[...document.querySelectorAll('.real-run button')].find(x=>x.textContent.includes('Run Backtest')||x.textContent.includes('Running')); if(!b) return 'NO'; b.click(); return 'CLICKED'; })()"""
-CLICK_SOURCE_JS = """((needle) => { const b=[...document.querySelectorAll('.run-source button')].find(x=>x.textContent.includes(needle)); if(!b) return 'NO'; b.click(); return 'OK'; })"""
+CLICK_SOURCE_JS = OPEN_RUN_JS
 
 
 def check(name, cond, detail=""):
@@ -152,7 +151,7 @@ def main() -> int:
         strategy=run_request.StrategyRequest(selector="candle_direction", parameters={}),
         market=run_request.MarketRequest(
             symbol="XAUUSD", timeframe="15min", start="2025-01-02", end="2025-01-02",
-            data_source=str(ROOT / "data" / "XAUUSD_DUKAS_2025_01_ticks.csv"),
+            data_source=str(ROOT / "data" / "XAUUSD" / "XAUUSD_DUKAS_2025_01_ticks.csv"),
         ),
         execution=run_request.ExecutionRequest(stop_distance=5, take_profit_distance=10),
         publish=False,
@@ -177,10 +176,10 @@ def main() -> int:
             cdp.call(dom)
         cdp.call("Page.navigate", {"url": APP_URL})
 
-        ok &= check("Demo still loads", cdp.evaluate(f"({WAIT_BADGE_JS})('DEMO')"), "DEMO")
+        ok &= check("archived run loads", cdp.evaluate(f"({WAIT_BADGE_JS})('ARCHIVED RUN')"), "ARCHIVED RUN")
         ok &= check("bridge Connected (hydrated)", cdp.evaluate(f"({WAIT_TEXT_JS})(['.engine','Connected'])"),
                     cdp.evaluate(f"({TEXT_JS})('.engine')"))
-        ok &= check("run_0001 present in selector", cdp.evaluate(f"({WAIT_SOURCE_JS})('run_0001')"))
+        ok &= check("run_0001 archived", (PUBLIC / "runs-run_0001-result.json").is_file())
         ok &= check("real-run catalogs load", cdp.evaluate(f"({WAIT_TEXT_JS})(['[aria-label=\"Real run strategy\"]','Candle Direction'])"),
                     cdp.evaluate(f"({TEXT_JS})('[aria-label=\"Real run strategy\"]')"))
         ok &= check("dataset catalog loads", cdp.evaluate(f"({WAIT_TEXT_JS})(['[aria-label=\"Real run dataset\"]','XAUUSD'])"))
@@ -235,7 +234,7 @@ def main() -> int:
         cdp.evaluate(f"({CLICK_ARIA_JS})({json.dumps(f'Reuse configuration from {run_a}')})")
         close_library(cdp)
         ok &= check("reuse restored dates", cdp.evaluate(
-            "(document.querySelector('[aria-label=\"Run start date\"]').value==='2025-01-02')"))
+            "(document.querySelector('[aria-label=\"Run start date\"]').value==='02/01/2025')"))
         strat_text = cdp.evaluate(f"({TEXT_JS})('[aria-label=\"Real run strategy\"]')") or ""
         ok &= check("reuse restored strategy", "Candle Direction" in strat_text, strat_text[:60])
         # change execution settings -> second run differs
@@ -315,10 +314,10 @@ def main() -> int:
                     cdp.evaluate(f"({WAIT_STATUS_ID_JS})('run_local')") and (PUBLIC / "runs-run_local-result.json").is_file())
 
         # ---- delete a published run ------------------------------------------
-        # make run A active so we can assert the dashboard returns to Demo
+        # make run A active so we can assert the dashboard falls back to another archived run
         cdp.evaluate(f"({CLICK_SOURCE_JS})({json.dumps(run_a or '')})")
         cdp.pump(0.6)
-        runs_before_del = cdp.evaluate("document.querySelectorAll('.run-source button').length")
+        runs_before_del = cdp.evaluate("Number((document.querySelector('.run-context-bar')||{}).dataset?.runCount || 0)")
         open_library(cdp)
         open_runs_tab(cdp)
         ok &= check("run A listed for delete", cdp.evaluate(f"({WAIT_LIB_JS})({json.dumps(run_a or '')})"))
@@ -332,14 +331,11 @@ def main() -> int:
         ok &= check("run A manifest entry removed", run_a not in [r["runId"] for r in manifest_now["runs"]])
         close_library(cdp)
         cdp.pump(0.6)
-        runs_after_del = cdp.evaluate("document.querySelectorAll('.run-source button').length")
-        ok &= check("run-source selector refreshed", runs_after_del == runs_before_del - 1, f"{runs_before_del} -> {runs_after_del}")
+        runs_after_del = cdp.evaluate("Number((document.querySelector('.run-context-bar')||{}).dataset?.runCount || 0)")
+        ok &= check("run count refreshed", runs_after_del == runs_before_del - 1, f"{runs_before_del} -> {runs_after_del}")
         ok &= check("other runs untouched", (runs_dir / "run_0001").is_dir() and (PUBLIC / "runs-run_0001-result.json").is_file())
 
-        # demo still works
-        cdp.evaluate(f"({CLICK_SOURCE_JS})('Demo')")
-        ok &= check("Demo restores", cdp.evaluate(f"({WAIT_ROW_JS})(['{DEMO_ENTRY}'])") )
-        ok &= check("run_0001 still opens", cdp.evaluate(f"({CLICK_SOURCE_JS})('run_0001')") == "OK" and cdp.evaluate(f"({WAIT_ROW_JS})(['{RUN0001_ENTRY}'])") )
+        ok &= check("run_0001 still opens", cdp.evaluate(f"({CLICK_SOURCE_JS})('run_0001')") == "CLICKED" and cdp.evaluate(f"({WAIT_ROW_JS})(['{RUN0001_ENTRY}'])") )
 
         errs = [e for e in cdp.console_errors if "favicon" not in e.lower() and "status of 40" not in e.lower()]
         hydra = [e for e in cdp.console_errors if "hydrat" in e.lower()]

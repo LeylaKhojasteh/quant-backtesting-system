@@ -9,8 +9,8 @@ run), drives Chrome over CDP, and verifies the full flow:
   report.html + published -> new run appears in the run source -> UI
   auto-switches -> metrics/trades match the archived result.json -> Inspector
   and Analytics work, unsupported metrics stay unavailable -> run_0001 still
-  loads -> Demo still works -> switch back to the new run (no stale data) ->
-  bridge offline shows Unavailable while Demo keeps working.
+  loads -> switch back to the new run (no stale data) -> bridge offline shows
+  Unavailable while archived runs remain viewable.
 
 The repo's frontend public artifacts are snapshotted and restored afterwards.
 """
@@ -28,12 +28,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from scripts.e2e_run_switch import e2e_main, launch_bridge, require_bridge_port_free
+from scripts.e2e_common import e2e_main, launch_bridge, require_bridge_port_free
 
-from scripts.e2e_run_switch import (  # noqa: E402
+from scripts.e2e_common import (  # noqa: E402
     CDP,
     CLICK_NAV_JS,
     CLICK_RESULT_TAB_JS,
+    OPEN_RUN_JS,
     TEXT_JS,
     WAIT_BADGE_JS,
     WAIT_SEL_JS,
@@ -45,24 +46,23 @@ from scripts.e2e_run_switch import (  # noqa: E402
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-APP_URL = os.environ.get("QBL_APP_URL", "http://127.0.0.1:5173/?fixture=demo")
+APP_URL = os.environ.get("QBL_APP_URL", "http://127.0.0.1:5173/")
 BRIDGE_PORT = 8765
 BRIDGE_URL = f"http://127.0.0.1:{BRIDGE_PORT}"
 PUBLIC = ROOT / "Quant-Backtest-Lab" / "public"
 MANIFEST = PUBLIC / "adapters-run-manifest.json"
-DEMO_ENTRY = "2,799.84"
 RUN0001_ENTRY = "2,626.08"
 
 _POLL = "const t0=Date.now();const iv=setInterval(()=>{if(ok()||Date.now()-t0>MAX){clearInterval(iv);res(ok());}},250);"
 WAIT_SOURCE_JS = ("(needle => new Promise(res => {"
-                  " const ok=()=>[...document.querySelectorAll('.run-source button')].some(b=>b.textContent.includes(needle));"
+                  " const ok=()=>((document.querySelector('.source-current')||{}).textContent||'').includes(needle);"
                   " if(ok())return res(true);" + _POLL.replace("MAX", "25000") + "}))")
 WAIT_ROW_JS = ("(([text,notText]) => new Promise(res => {"
-               " const ok=()=>{const r=document.querySelector('.overview-trade-log tbody tr');"
-               "  return !!r && r.textContent.includes(text) && (!notText || !r.textContent.includes(notText));};"
+               " const ok=()=>{const el=document.querySelector('.run-context-bar');const entry=(el&&el.dataset.firstEntry)||'';"
+               "  return !!entry && entry.includes(text) && (!notText || !entry.includes(notText));};"
                " if(ok())return res(true);" + _POLL.replace("MAX", "25000") + "}))")
 WAIT_DONE_JS = ("((() => new Promise(res => {"
-                " const ok=()=>{const b=document.querySelector('.demo-badge');"
+                " const ok=()=>{const b=document.querySelector('.run-badge');"
                 "  return !!b && b.textContent.trim()==='ARCHIVED RUN';};"
                 " if(ok())return res(true);" + _POLL.replace("MAX", "180000") + "}))())")
 # v1.0.1 async jobs: the run button disables while active; completion is
@@ -117,12 +117,7 @@ CLICK_RUN_JS = """(() => {
   return 'CLICKED';
 })()"""
 
-CLICK_SOURCE_JS = """((needle) => {
-  const b = [...document.querySelectorAll('.run-source button')].find(x => x.textContent.includes(needle));
-  if (!b) return 'NOT_FOUND';
-  b.click();
-  return 'CLICKED';
-})"""
+CLICK_SOURCE_JS = OPEN_RUN_JS
 
 
 def check(name: str, cond, detail: str = "") -> bool:
@@ -193,8 +188,8 @@ def main() -> int:
         cdp.call("Page.navigate", {"url": APP_URL})
 
         # ---- app + bridge status ---------------------------------------------
-        ok &= check("app loads Demo", cdp.evaluate(f"({WAIT_BADGE_JS})('DEMO')"), "DEMO")
-        ok &= check("run_0001 present", cdp.evaluate(f"({WAIT_SOURCE_JS})('run_0001')"))
+        ok &= check("app loads archived run", cdp.evaluate(f"({WAIT_BADGE_JS})('ARCHIVED RUN')"), "ARCHIVED RUN")
+        ok &= check("run_0001 archived", (PUBLIC / "runs-run_0001-result.json").is_file())
         ok &= check("bridge shows Connected",
                     cdp.evaluate(f"({WAIT_TEXT_JS})(['.engine','Connected'])"),
                     cdp.evaluate(f"({TEXT_JS})('.engine')"))
@@ -206,7 +201,7 @@ def main() -> int:
                     cdp.evaluate(f"({TEXT_JS})('[aria-label=\"Real run dataset\"]')"))
 
         # ---- out-of-coverage range -> clean structured error (fresh page) ----
-        runs_before_err = cdp.evaluate("document.querySelectorAll('.run-source button').length")
+        runs_before_err = cdp.evaluate("Number((document.querySelector('.run-context-bar')||{}).dataset?.runCount || 0)")
         set_dates(cdp, "2024-05-05", "2024-05-05")
         cdp.evaluate(f"({WAIT_ENABLED_JS})")
         cdp.evaluate(CLICK_RUN_JS)
@@ -219,24 +214,24 @@ def main() -> int:
         ok &= check("job failure displayed for empty range",
                     cdp.evaluate(f"({WAIT_TEXT_JS})(['.run-activity','Backtest failed'])"),
                     cdp.evaluate(f"({TEXT_JS})('.run-activity')"))
-        runs_after_err = cdp.evaluate("document.querySelectorAll('.run-source button').length")
+        runs_after_err = cdp.evaluate("Number((document.querySelector('.run-context-bar')||{}).dataset?.runCount || 0)")
         ok &= check("failed run adds no selector entry", runs_after_err == runs_before_err, f"{runs_before_err} -> {runs_after_err}")
-        ok &= check("no fallback: still Demo", cdp.evaluate(
-            "document.querySelector('.run-source button.source-active')?.textContent.includes('Demo')"))
+        ok &= check("no fallback: previous archived run stays active", cdp.evaluate(
+            "document.querySelector('.source-current')?.textContent.includes('run_0001')"))
         # v1.0.1: only one active job is allowed. The failed job above is
         # terminal, so the slot is free; reload for a clean form state.
         cdp.call("Page.navigate", {"url": APP_URL})
-        ok &= check("app reloads Demo after failure", cdp.evaluate(f"({WAIT_BADGE_JS})('DEMO')"))
+        ok &= check("app reloads archived run after failure", cdp.evaluate(f"({WAIT_BADGE_JS})('ARCHIVED RUN')"))
         ok &= check("bridge reconnects after reload",
                     cdp.evaluate(f"({WAIT_TEXT_JS})(['.engine','Connected'])"))
 
         # ---- configure + run a known real-data candle_direction backtest -----
         set_dates(cdp, "2025-01-02", "2025-01-02")
         ok &= check("run dates applied",
-                    cdp.evaluate(f"({WAIT_INPUT_JS})(['[aria-label=\"Run start date\"]','2025-01-02'])"),
+                    cdp.evaluate(f"({WAIT_INPUT_JS})(['[aria-label=\"Run start date\"]','02/01/2025'])"),
                     cdp.evaluate("document.querySelector('[aria-label=\"Run start date\"]').value"))
         ok &= check("Run Backtest enabled", cdp.evaluate(WAIT_ENABLED_JS))
-        runs_before = cdp.evaluate("document.querySelectorAll('.run-source button').length")
+        runs_before = cdp.evaluate("Number((document.querySelector('.run-context-bar')||{}).dataset?.runCount || 0)")
         cdp.evaluate(INSTALL_OBSERVER_JS)
         cdp.evaluate(CLICK_RUN_JS)
         # duplicate clicks in the same tick must not start a second run
@@ -247,7 +242,7 @@ def main() -> int:
         ok &= check("backtest completes + auto-loads", cdp.evaluate(WAIT_DONE_JS, timeout=240),
                     cdp.evaluate(f"({TEXT_JS})('.run-context-bar .rr-notice')"))
         ok &= check("Running state appears", cdp.evaluate(SAW_RUNNING_JS))
-        runs_after = cdp.evaluate("document.querySelectorAll('.run-source button').length")
+        runs_after = cdp.evaluate("Number((document.querySelector('.run-context-bar')||{}).dataset?.runCount || 0)")
         ok &= check("exactly one new run (duplicate clicks ignored)", runs_after == runs_before + 1,
                     f"{runs_before} -> {runs_after}")
 
@@ -269,47 +264,47 @@ def main() -> int:
         metrics = payload.get("metrics", {})
         first_entry = fmt(trades[0]["entry_price"]) if trades else ""
         ok &= check("auto-loaded run rendered",
-                    cdp.evaluate(f"({WAIT_ROW_JS})(['{first_entry}','{DEMO_ENTRY}'])") if first_entry else False,
+                    cdp.evaluate(f"({WAIT_ROW_JS})([{json.dumps(first_entry)},''])") if first_entry else False,
                     first_entry)
-        trade_rows = cdp.evaluate("document.querySelectorAll('.overview-trade-log tbody tr').length")
-        first_row = cdp.evaluate("(() => { const r=document.querySelector('.overview-trade-log tbody tr'); return r?r.textContent.replace(/\\s+/g,' '):''; })()")
+        trade_rows = cdp.evaluate("Number((document.querySelector('.run-context-bar')||{}).dataset?.tradeCount || 0)")
+        first_row = cdp.evaluate("((document.querySelector('.run-context-bar')||{}).dataset||{}).firstEntry || ''")
+        cdp.evaluate(f"({CLICK_NAV_JS})('Backtest')")
         metrics_text = cdp.evaluate(f"({TEXT_JS})('.metrics-grouped')") or ""
         ok &= check("trade count matches archive", trade_rows == len(trades), f"dom={trade_rows} archive={len(trades)}")
         ok &= check("first trade matches archive", bool(first_entry) and first_entry in first_row,
                     f"{first_entry} | {first_row[:80]}")
         ok &= check("net PnL matches archive", fmt(metrics.get("net_pnl", 0)) in metrics_text,
                     fmt(metrics.get("net_pnl", 0)))
-        ok &= check("no stale demo values", DEMO_ENTRY not in first_row, first_row[:80])
 
         # ---- Inspector / Analytics / unavailable metrics ---------------------
         cdp.evaluate(f"({CLICK_NAV_JS})('Trade Inspector')")
         ok &= check("Trade Inspector renders", cdp.evaluate(f"({WAIT_SEL_JS})('.inspector')"))
         insp = cdp.evaluate(f"({TEXT_JS})('.inspector')") or ""
         ok &= check("Inspector shows archived trade", first_entry in insp, insp[:100])
-        ok &= check("Inspector MAE/MFE unavailable (N/A)", "MAE N/A" in insp and "MFE N/A" in insp)
+        ok &= check("Inspector shows MAE/MFE", "MAE" in insp and "MFE" in insp)
         cdp.evaluate(f"({CLICK_NAV_JS})('Backtest')")
-        cdp.evaluate(f"({WAIT_SEL_JS})('.overview-trade-log')")
+        cdp.evaluate(f"({WAIT_SEL_JS})('.metrics-grouped')")
         cdp.evaluate(f"({CLICK_RESULT_TAB_JS})('Analytics')")
         cdp.evaluate("(t=>{const b=[...document.querySelectorAll('.analytics-nav button')].find(x=>x.textContent.includes(t)); if(b) b.click();})('Account & Data')")
         ok &= check("Analytics run identity renders", cdp.evaluate(f"({WAIT_SEL_JS})('.run-identity')"))
         ident = cdp.evaluate(f"({TEXT_JS})('.run-identity')") or ""
         ok &= check("Analytics shows run strategy", payload.get("strategy", {}).get("name", "") in ident, ident[:120])
         cdp.evaluate("(t=>{const b=[...document.querySelectorAll('.analytics-nav button')].find(x=>x.textContent.includes(t)); if(b) b.click();})('Risk & Drawdown')")
-        pending = cdp.evaluate("Array.from(document.querySelectorAll('.analytics-view .pm[role=\"status\"]')).map(e=>e.getAttribute('aria-label'))") or []
-        ok &= check("unsupported MAE/MFE metrics stay unavailable", any("Average MAE" in x for x in pending),
-                    "; ".join(pending)[:140])
+        analytics_text = cdp.evaluate(f"({TEXT_JS})('.analytics-view')") or ""
+        ok &= check("MAE/MFE analytics render", "Average MAE" in analytics_text and "Average MFE" in analytics_text,
+                    analytics_text[:140])
         cdp.evaluate(f"({CLICK_RESULT_TAB_JS})('Overview')")
-        cdp.evaluate(f"({WAIT_SEL_JS})('.overview-trade-log')")
+        cdp.evaluate(f"({WAIT_SEL_JS})('.metrics-grouped')")
 
-        # ---- existing run_0001 + Demo + back ---------------------------------
+        # ---- existing run_0001 + back to the new run -------------------------
         ok &= check("run_0001 still loads", cdp.evaluate(f"({CLICK_SOURCE_JS})('run_0001')") == "CLICKED")
         ok &= check("run_0001 data restored", cdp.evaluate(f"({WAIT_ROW_JS})(['{RUN0001_ENTRY}',''])") )
-        ok &= check("switch to Demo", cdp.evaluate(f"({CLICK_SOURCE_JS})('Demo')") == "CLICKED")
-        ok &= check("Demo data restored", cdp.evaluate(f"({WAIT_ROW_JS})(['{DEMO_ENTRY}',''])") )
         ok &= check("switch back to new run", cdp.evaluate(f"({CLICK_SOURCE_JS})({json.dumps(new_run or '')})") == "CLICKED")
         ok &= check("new run data restored (no stale)",
-                    cdp.evaluate(f"({WAIT_ROW_JS})(['{first_entry}','{DEMO_ENTRY}'])") )
-        ok &= check("selected trade resets to #1", (cdp.evaluate(f"({TEXT_JS})('.overview-trade-log tr.selected td:first-child')") or "").strip() == "1")
+                    cdp.evaluate(f"({WAIT_ROW_JS})([{json.dumps(first_entry)},''])") if first_entry else False)
+        cdp.evaluate(f"({CLICK_NAV_JS})('Trade Inspector')")
+        cdp.evaluate(f"({WAIT_SEL_JS})('.trade-list .trade-row')")
+        ok &= check("selected trade resets to #1", cdp.evaluate("(document.querySelector('.trade-row.selected')||{}).dataset?.tradeId") == "1")
 
         errs = [e for e in cdp.console_errors
                 if "favicon" not in e.lower()
@@ -322,9 +317,9 @@ def main() -> int:
         bridge.terminate()
         bridge.wait(timeout=10)
         cdp.call("Page.navigate", {"url": APP_URL})
-        ok &= check("offline: app still loads Demo", cdp.evaluate(f"({WAIT_BADGE_JS})('DEMO')"))
+        ok &= check("offline: app still loads archived run", cdp.evaluate(f"({WAIT_BADGE_JS})('ARCHIVED RUN')"))
         ok &= check("offline: engine shows Unavailable", cdp.evaluate(f"({WAIT_TEXT_JS})(['.engine','Offline'])"))
-        ok &= check("offline: Demo workflow works", cdp.evaluate(f"({WAIT_ROW_JS})(['{DEMO_ENTRY}',''])") )
+        ok &= check("offline: archived run view works", cdp.evaluate(f"({WAIT_ROW_JS})(['{RUN0001_ENTRY}',''])") )
         ok &= check("offline: real-run control disabled", cdp.evaluate(
             "(() => { const b=[...document.querySelectorAll('.real-run button')].find(x=>x.textContent.includes('Run Backtest')); return !!b && b.disabled; })()"))
         cdp.ws.close()

@@ -42,7 +42,7 @@ class StrategyImportTest(unittest.TestCase):
     # ---- success ----------------------------------------------------------
 
     def test_valid_import(self):
-        strategy, target = import_strategy("ema_cross.py", EMA_SOURCE, strategy_dir=self.dir)
+        strategy, target, created = import_strategy("ema_cross.py", EMA_SOURCE, strategy_dir=self.dir)
         self.assertEqual(target.name, "ema_cross.py")
         self.assertTrue(target.is_file())
         self.assertEqual(target.read_text(encoding="utf-8"), EMA_SOURCE)
@@ -53,7 +53,7 @@ class StrategyImportTest(unittest.TestCase):
 
     def test_legacy_function_falls_back_to_filename_stem(self):
         source = "def generate_signals(candles):\n    return candles.iloc[0:0]\n"
-        strategy, _ = import_strategy("my_thing.py", source, strategy_dir=self.dir)
+        strategy, _, _ = import_strategy("my_thing.py", source, strategy_dir=self.dir)
         self.assertEqual(strategy.metadata()["name"], "my_thing")
 
     # ---- filename rejection ----------------------------------------------
@@ -109,6 +109,18 @@ class StrategyImportTest(unittest.TestCase):
         with self.assertRaises(StrategyConflictError):
             import_strategy("ema_cross.py", changed, strategy_dir=self.dir)
         self.assertEqual((self.dir / "ema_cross.py").read_text(encoding="utf-8"), original)
+        self.assertEqual(self._entries(), ["ema_cross.py"])
+
+    def test_overwrite_updates_existing_file_in_place(self):
+        strategy, _, created = import_strategy("ema_cross.py", EMA_SOURCE, strategy_dir=self.dir)
+        self.assertTrue(created)
+        changed = EMA_SOURCE.replace('VERSION = "import-1.0"', 'VERSION = "import-2.0"')
+        strategy2, target, created2 = import_strategy(
+            "ema_cross.py", changed, strategy_dir=self.dir, overwrite=True,
+        )
+        self.assertFalse(created2)
+        self.assertEqual(target.read_text(encoding="utf-8"), changed)
+        self.assertEqual(strategy2.metadata()["version"], "import-2.0")
         self.assertEqual(self._entries(), ["ema_cross.py"])
 
 

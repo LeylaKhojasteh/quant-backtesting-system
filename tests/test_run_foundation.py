@@ -29,7 +29,7 @@ from src.result_contract import (
 from src.strategies import base as strategy_base
 
 
-def _demo_trades_df():
+def _sample_trades_df():
     ticks = pd.DataFrame(
         {
             "timestamp": pd.to_datetime(
@@ -49,8 +49,8 @@ def _demo_trades_df():
     return engine.run_backtest(ticks, signals, 5, 10)
 
 
-def _demo_result(run_id="run_test"):
-    records = trades_from_engine(_demo_trades_df())
+def _sample_result(run_id="run_test"):
+    records = trades_from_engine(_sample_trades_df())
     metrics = compute_metrics(records)
     return BacktestResult(
         contract_version="1.0",
@@ -63,13 +63,13 @@ def _demo_result(run_id="run_test"):
         trades=records,
         equity=equity_from_trades(records),
         metrics=metrics,
-        data_quality=DataQuality(data_source="demo"),
+        data_quality=DataQuality(data_source="test-sample"),
         execution=ExecutionInfo(),
     )
 
 
 def test_contract_has_all_required_sections():
-    result = _demo_result()
+    result = _sample_result()
     assert result.validate() == []
     payload = json.loads(result.to_json())
     for key in (
@@ -90,13 +90,13 @@ def test_contract_has_all_required_sections():
 
 
 def test_engine_exit_reason_normalized_to_contract():
-    records = trades_from_engine(_demo_trades_df())
+    records = trades_from_engine(_sample_trades_df())
     assert records, "engine should produce a trade on this fixture"
     assert all(r.exit_reason in ("TP", "SL", "EOD") for r in records)
 
 
 def test_metrics_and_equity_consistent_without_account_synthesis():
-    result = _demo_result()
+    result = _sample_result()
     assert result.metrics.total_trades == len(result.trades)
     assert len(result.equity) >= len(result.trades)
     for point in result.equity:
@@ -120,10 +120,19 @@ def test_strategy_interface_contract():
         }
     )
     assert strategy_base.validate_signals(good_signals) == []
+    naive = good_signals.copy()
+    naive["signal_available_time"] = naive["signal_available_time"].dt.tz_localize(None)
+    assert strategy_base.validate_signals(naive) != []
+    nat = good_signals.copy()
+    nat.loc[0, "signal_candle_start"] = pd.NaT
+    assert strategy_base.validate_signals(nat) != []
+    early = good_signals.copy()
+    early["signal_available_time"] = pd.to_datetime(["2024-12-31T23:00:00Z"])
+    assert strategy_base.validate_signals(early) != []
 
 
 def test_run_store_roundtrip(tmp_path):
-    result = _demo_result()
+    result = _sample_result()
     directory = run_store.save_run(
         tmp_path,
         result.run_id,

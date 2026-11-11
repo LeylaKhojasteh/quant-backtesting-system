@@ -149,7 +149,7 @@ def main() -> int:
     candles = de.load_candles_frame(SOURCE, timeframe=TIMEFRAME, symbol="XAUUSD", start=START, end=END)
     t_candle = time.perf_counter() - t0
     t0 = time.perf_counter()
-    signals = strategy_loader.generate_validated_signals(strategy, candles)
+    signals = strategy_loader.generate_validated_signals(strategy, candles, timeframe=TIMEFRAME)
     t_sig = time.perf_counter() - t0
     t0 = time.perf_counter()
     trades = run_backtest.engine.run_backtest(ticks, signals, 5.0, 10.0)

@@ -11,9 +11,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from scripts.e2e_run_switch import e2e_main
+from scripts.e2e_common import e2e_main
 
-from scripts.e2e_run_switch import CDP, TEXT_JS, WAIT_SEL_JS, launch_chrome, wait_debugger  # noqa: E402
+from scripts.e2e_common import CDP, TEXT_JS, WAIT_SEL_JS, launch_chrome, wait_debugger  # noqa: E402
 
 APP = "http://127.0.0.1:5173/"
 SIZES = [("1920", 1920, 1080), ("1600", 1600, 900), ("1440", 1440, 900),
@@ -71,21 +71,21 @@ def main() -> int:
         cdp.call("Emulation.setDeviceMetricsOverride", {"width": 1440, "height": 900, "deviceScaleFactor": 1, "mobile": False})
         time.sleep(0.6)
 
-        # 1) hover the ACTUAL MAE N/A / MFE N/A values in the Trade Log
-        n = cdp.evaluate("document.querySelectorAll('.overview-trade-log .excursion-value').length") or 0
+        # 1) hover the ACTUAL MAE N/A / MFE N/A values in Trade Explorer
+        cdp.evaluate(f"({CLICK_TEXT_JS})(['.navigation button','Trade Inspector'])")
+        time.sleep(0.7)
+        n = cdp.evaluate("document.querySelectorAll('.trade-list .excursion-value').length") or 0
         ok &= check("trade-log MAE/MFE values present", n >= 2, str(n))
-        hover_index(cdp, ".overview-trade-log .excursion-value", 0)
+        hover_index(cdp, ".trade-list .excursion-value", 0)
         tt = tooltip_text(cdp)
         ok &= check("MAE N/A hover shows explanation", "Maximum Adverse Excursion" in tt, tt[:70])
         cdp.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": 5, "y": 5, "button": "none"})
         time.sleep(0.5)
-        hover_index(cdp, ".overview-trade-log .excursion-value", 1)
+        hover_index(cdp, ".trade-list .excursion-value", 1)
         tt2 = tooltip_text(cdp)
         ok &= check("MFE N/A hover shows explanation", "Maximum Favorable Excursion" in tt2, tt2[:70])
 
         # also the Trade Explorer rows in the Inspector
-        cdp.evaluate(f"({CLICK_TEXT_JS})(['.navigation button','Trade Inspector'])")
-        time.sleep(0.7)
         ok &= check("inspector explorer MAE/MFE values present", cdp.evaluate("document.querySelectorAll('.trade-explorer .excursion-value').length") >= 2)
         hovx = hover(cdp, ".trade-explorer .excursion-value")
         ok &= check("inspector MAE hover shows explanation", hovx and "Maximum Adverse Excursion" in tooltip_text(cdp), tooltip_text(cdp)[:60])

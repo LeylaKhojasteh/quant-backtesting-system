@@ -20,22 +20,21 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from scripts.e2e_run_switch import e2e_main, launch_bridge, require_bridge_port_free
+from scripts.e2e_common import e2e_main, launch_bridge, require_bridge_port_free
 
-from scripts.e2e_run_switch import (  # noqa: E402
-    CDP, TEXT_JS, WAIT_BADGE_JS, WAIT_SEL_JS, WAIT_TEXT_JS, launch_chrome, wait_debugger,
+from scripts.e2e_common import (  # noqa: E402
+    CDP, OPEN_RUN_JS, TEXT_JS, WAIT_BADGE_JS, WAIT_SEL_JS, WAIT_TEXT_JS, launch_chrome, wait_debugger,
 )
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-APP_URL = os.environ.get("QBL_APP_URL", "http://127.0.0.1:5173/?fixture=demo")
+APP_URL = os.environ.get("QBL_APP_URL", "http://127.0.0.1:5173/")
 BRIDGE = "http://127.0.0.1:8765"
 PUBLIC = ROOT / "Quant-Backtest-Lab" / "public"
 MANIFEST = PUBLIC / "adapters-run-manifest.json"
 FIXTURE = ROOT / "tests" / "fixtures" / "run_0001"
 THRESHOLD = ROOT / "tests" / "fixtures" / "strategies" / "threshold_direction.py"
-DEMO_ENTRY = "2,799.84"
 
 _POLL = "const t0=Date.now();const iv=setInterval(()=>{if(ok()||Date.now()-t0>MAX){clearInterval(iv);res(ok());}},250);"
 
@@ -174,12 +173,12 @@ def main() -> int:
         for dom in ("Page.enable", "Runtime.enable", "Log.enable", "Network.enable", "DOM.enable"):
             cdp.call(dom)
         cdp.call("Page.navigate", {"url": APP_URL})
-        ok &= check("app opens on Demo", cdp.evaluate(f"({WAIT_BADGE_JS})('DEMO')"))
+        ok &= check("app opens on an archived run", cdp.evaluate(f"({WAIT_BADGE_JS})('ARCHIVED RUN')"))
         ok &= check("bridge Connected", cdp.evaluate(f"({WAIT_TEXT_JS})(['.engine','Connected'])"))
         cdp.evaluate("window.open=(u)=>{window.__opened=u;return null;};")
 
         # 3. run_0001 remains account-unavailable
-        cdp.evaluate("(id=>{const b=[...document.querySelectorAll('.run-source button')].find(x=>x.textContent.includes(id)); if(b) b.click(); return !!b;})('run_0001')")
+        cdp.evaluate(f"({OPEN_RUN_JS})('run_0001')")
         ok &= check("run_0001 opens as archived", cdp.evaluate(f"({WAIT_BADGE_JS})('ARCHIVED RUN')"))
         ok &= check("run_0001 is account-unavailable",
                     cdp.evaluate(f"({WAIT_SEL_JS})('[aria-label=\"Balance: Pending\"]')")
@@ -281,7 +280,10 @@ def main() -> int:
         ok &= check("account run listed in library", cdp.evaluate(f"({WAIT_LIB_JS})({json.dumps(run_id)})"))
         cdp.evaluate(f"({CLICK_ARIA_JS})({json.dumps(f'Open {run_id} in dashboard')})")
         ok &= check("open run from library", cdp.evaluate(f"({WAIT_BADGE_JS})('ARCHIVED RUN')"))
-        cdp.evaluate("(id=>{const b=[...document.querySelectorAll('.run-source button')].find(x=>x.textContent.includes(id)); if(b) b.click(); return !!b;})('run_0001')")
+        cdp.evaluate(f"({OPEN_RUN_JS})('run_0001')")
+        open_library(cdp)
+        open_tab(cdp, "Runs")
+        ok &= check("account run still listed", cdp.evaluate(f"({WAIT_LIB_JS})({json.dumps(run_id)})"))
         cdp.evaluate(f"({CLICK_ARIA_JS})({json.dumps(f'Open {run_id} in dashboard')})")
         ok &= check("account metrics identical after reload", cdp.evaluate(f"({WAIT_METRICS_JS})({json.dumps(fmt(ending_expected))})"))
 
@@ -305,12 +307,6 @@ def main() -> int:
         open_tab(cdp, "Walk-Forward")
         ok &= check("existing Walk-Forward still works", cdp.evaluate(f"({WAIT_SEL_JS})('[aria-label=\"Walk-forward strategy\"]')"))
         close_library(cdp)
-
-        # Demo unchanged
-        cdp.evaluate(f"({CLICK_TEXT_JS})(['.run-source button','Demo'])")
-        ok &= check("Demo still works", cdp.evaluate(f"({WAIT_TEXT_JS})(['.demo-badge','DEMO'])"))
-        ok &= check("demo price-term engine unchanged",
-                    cdp.evaluate(f"({WAIT_METRICS_JS})({json.dumps('7')})"))
 
         errs = [e for e in cdp.console_errors if "favicon" not in e.lower() and "status of 40" not in e.lower()]
         hydra = [e for e in cdp.console_errors if "hydrat" in e.lower()]

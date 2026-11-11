@@ -72,6 +72,16 @@ class MarketRequest:
     #: resolves via the derived tick/candle cache rather than a raw filesystem path.
     dataset_id: str | None = None
 
+    def __post_init__(self):
+        # ``cache:<id>`` already names the dataset; keep the id populated so
+        # archived runs record provenance no matter which caller built this.
+        if self.dataset_id is None and isinstance(self.data_source, str):
+            source = self.data_source.strip()
+            if source.startswith("cache:"):
+                derived = source[len("cache:"):].strip()
+                if derived:
+                    self.dataset_id = derived
+
 
 @dataclass
 class ExecutionRequest:
@@ -91,6 +101,9 @@ class ExecutionRequest:
     take_profit_distance: float | None = None
     stop_loss_pips: float | None = None
     take_profit_pips: float | None = None
+    #: Full spread in basis points, used only by candle datasets (OHLC markets).
+    #: Tick datasets measure spread from their own bid/ask and ignore this.
+    spread_bps: float | None = None
     #: Pip size used for the conversion (None for legacy price-unit runs).
     pip_size: float | None = None
 
@@ -391,6 +404,7 @@ def parse_request_payload(payload) -> BacktestRunRequest:
         raise InvalidExecutionError("execution must be an object")
     execution_unknown = sorted(set(raw_execution) - {
         "stop_distance", "take_profit_distance", "stop_loss_pips", "take_profit_pips",
+        "spread_bps",
     })
     if execution_unknown:
         raise InvalidExecutionError(f"unknown execution field(s): {execution_unknown}")
@@ -415,6 +429,13 @@ def parse_request_payload(payload) -> BacktestRunRequest:
     take_profit = _optional_positive_number(
         "execution.take_profit_distance", raw_execution.get("take_profit_distance")
     )
+    spread_bps = raw_execution.get("spread_bps")
+    if spread_bps is not None:
+        if isinstance(spread_bps, bool) or not isinstance(spread_bps, (int, float)):
+            raise InvalidExecutionError("execution.spread_bps must be a number")
+        spread_bps = float(spread_bps)
+        if not (spread_bps >= 0) or spread_bps != spread_bps:
+            raise InvalidExecutionError("execution.spread_bps must be >= 0")
 
     publish = payload.get("publish", False)
     if not isinstance(publish, bool):
@@ -450,6 +471,7 @@ def parse_request_payload(payload) -> BacktestRunRequest:
             stop_loss_pips=stop_loss_pips,
             take_profit_pips=take_profit_pips,
             pip_size=pip_used,
+            spread_bps=spread_bps,
         ),
         account=account,
         instrument=instrument,
@@ -548,4 +570,6 @@ def _execution_config(execution: ExecutionRequest) -> dict:
                 "effective_take_profit_distance": execution.take_profit_distance,
             }
         )
+    if execution.spread_bps is not None:
+        config["spread_bps"] = execution.spread_bps
     return config

@@ -77,6 +77,7 @@ STAGE_LABELS = {
     "resolving_dataset": "Resolving dataset",
     "loading_ticks": "Loading ticks",
     "loading_candles": "Loading candles",
+    "validating_ticks": "Validating ticks",
     "generating_signals": "Generating signals",
     "executing_engine": "Engine execution",
     "building_result": "Building result",
@@ -209,7 +210,8 @@ class JobRegistry:
     # lifecycle
     # ------------------------------------------------------------------
     def start(self, payload: dict, *, runs_dir: str, public_dir: str,
-              strategy_dir: str, timeout: float = 600.0) -> JobRecord:
+              strategy_dir: str, data_dir: str | None = None,
+              timeout: float = 600.0) -> JobRecord:
         """Validate, reserve the single active slot, and spawn the worker."""
         from src import run_request
 
@@ -222,7 +224,9 @@ class JobRegistry:
                         "a real backtest is already running; stop it before starting another")
                 self._active_job_id = None
             job_id = f"job_{uuid.uuid4().hex[:12]}"
-            run_request.parse_request_payload(payload)
+            request = run_request.parse_request_payload(payload)
+            if data_dir is not None:
+                run_request.validate_bridge_data_source(request.market, data_dir)
             directory = Path(runs_dir) / "jobs" / job_id
             directory.mkdir(parents=True, exist_ok=True)
             spec_path = directory / "request.json"

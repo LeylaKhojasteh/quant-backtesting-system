@@ -17,13 +17,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from scripts.e2e_run_switch import e2e_main, launch_bridge, require_bridge_port_free
+from scripts.e2e_common import e2e_main, launch_bridge, require_bridge_port_free
 
 os.environ.setdefault("no_proxy", "127.0.0.1,localhost")
 os.environ.setdefault("NO_PROXY", "127.0.0.1,localhost")
 _opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
-from scripts.e2e_run_switch import (  # noqa: E402
+from scripts.e2e_common import (  # noqa: E402
     CDP, TEXT_JS, WAIT_BADGE_JS, WAIT_SEL_JS, launch_chrome, wait_debugger,
 )
 
@@ -118,7 +118,8 @@ def main() -> int:
         ok &= check("metrics render (5749 trades)", cdp.evaluate(f"({WAIT_METRICS_JS})('5749')", timeout=60))
         ok &= check("net PnL renders", cdp.evaluate(f"({WAIT_METRICS_JS})('-3,711.54')", timeout=30))
         ok &= check("price chart renders", cdp.evaluate(f"({WAIT_SEL})('.charts-grid svg')", timeout=30))
-        ok &= check("trade log renders", cdp.evaluate(f"({WAIT_SEL})('.overview-trade-log tbody tr')", timeout=30))
+        cdp.evaluate(f"({CLICK_TEXT_JS})(['.navigation button','Trade Inspector'])")
+        ok &= check("trade explorer renders", cdp.evaluate(f"({WAIT_SEL})('.trade-list .trade-row')", timeout=30))
         print(f"UI load-to-metrics {load_s:.2f}s")
         cdp.call("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27})
         cdp.call("Input.dispatchKeyEvent", {"type": "keyUp", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27})

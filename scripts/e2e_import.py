@@ -9,7 +9,7 @@ trusted file strategy), drives Chrome over CDP, and verifies:
   report + publish -> new run auto-loads and matches result.json -> strategy.py
   snapshot equals the imported source -> invalid/missing-interface/syntax/
   non-.py/traversal/duplicate are rejected -> no permanent/temp garbage ->
-  Demo and run_0001 still work.
+  archived runs still work.
 
 The repo's frontend public artifacts are snapshotted and restored afterwards.
 """
@@ -26,10 +26,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from scripts.e2e_run_switch import e2e_main, launch_bridge, require_bridge_port_free
+from scripts.e2e_common import e2e_main, launch_bridge, require_bridge_port_free
 
-from scripts.e2e_run_switch import (  # noqa: E402
+from scripts.e2e_common import (  # noqa: E402
     CDP,
+    OPEN_RUN_JS,
     TEXT_JS,
     WAIT_BADGE_JS,
     WAIT_SEL_JS,
@@ -41,7 +42,7 @@ from scripts.e2e_run_switch import (  # noqa: E402
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-APP_URL = "http://127.0.0.1:5173/?fixture=demo"
+APP_URL = "http://127.0.0.1:5173/"
 BRIDGE_PORT = 8765
 BRIDGE_URL = f"http://127.0.0.1:{BRIDGE_PORT}"
 PUBLIC = ROOT / "Quant-Backtest-Lab" / "public"
@@ -49,20 +50,19 @@ MANIFEST = PUBLIC / "adapters-run-manifest.json"
 IMPORT_FIXTURES = ROOT / "tests" / "fixtures" / "import"
 EMA_PATH = IMPORT_FIXTURES / "ema_cross.py"
 EMA_SOURCE = EMA_PATH.read_text(encoding="utf-8")
-DEMO_ENTRY = "2,799.84"
 RUN0001_ENTRY = "2,626.08"
 
 _POLL = "const t0=Date.now();const iv=setInterval(()=>{if(ok()||Date.now()-t0>MAX){clearInterval(iv);res(ok());}},250);"
 WAIT_DONE_JS = ("(() => new Promise(res => {"
-                " const ok=()=>{const n=document.querySelector('.rr-notice');const b=document.querySelector('.demo-badge');"
+                " const ok=()=>{const n=document.querySelector('.rr-notice');const b=document.querySelector('.run-badge');"
                 "  return !!n && !!b && b.textContent.trim()==='ARCHIVED RUN';};"
                 " if(ok())return res(true);" + _POLL.replace("MAX", "150000") + "}))()")
 WAIT_ENABLED_JS = ("(() => new Promise(res => {"
                    " const ok=()=>{const b=[...document.querySelectorAll('.real-run button')].find(x=>x.textContent.includes('Run Backtest'));return !!b && !b.disabled;};"
                    " if(ok())return res(true);" + _POLL.replace("MAX", "30000") + "}))()")
 WAIT_ROW_JS = ("(([text,notText]) => new Promise(res => {"
-               " const ok=()=>{const r=document.querySelector('.overview-trade-log tbody tr');"
-               "  return !!r && r.textContent.includes(text) && (!notText || !r.textContent.includes(notText));};"
+               " const ok=()=>{const el=document.querySelector('.run-context-bar');const entry=(el&&el.dataset.firstEntry)||'';"
+               "  return !!entry && entry.includes(text) && (!notText || !entry.includes(notText));};"
                " if(ok())return res(true);" + _POLL.replace("MAX", "25000") + "}))")
 INSTALL_OBSERVER_JS = """(() => {
   window.__sawRunning = false;
@@ -91,11 +91,7 @@ CLICK_RUN_JS = """(() => {
   if (!b) return 'NO_BTN';
   b.click(); return 'CLICKED';
 })()"""
-CLICK_SOURCE_JS = """((needle) => {
-  const b = [...document.querySelectorAll('.run-source button')].find(x => x.textContent.includes(needle));
-  if (!b) return 'NOT_FOUND';
-  b.click(); return 'CLICKED';
-})"""
+CLICK_SOURCE_JS = OPEN_RUN_JS
 
 
 def check(name: str, cond, detail: str = "") -> bool:
@@ -205,7 +201,7 @@ def main() -> int:
         cdp.call("Page.navigate", {"url": APP_URL})
 
         # ---- existing state ---------------------------------------------------
-        ok &= check("app loads Demo", cdp.evaluate(f"({WAIT_BADGE_JS})('DEMO')"), "DEMO")
+        ok &= check("app loads archived run", cdp.evaluate(f"({WAIT_BADGE_JS})('ARCHIVED RUN')"), "ARCHIVED RUN")
         ok &= check("bridge Connected", cdp.evaluate(f"({WAIT_TEXT_JS})(['.engine','Connected'])"))
         ok &= check("existing strategies load", cdp.evaluate(
             f"({WAIT_TEXT_JS})(['[aria-label=\"Real run strategy\"]','Candle Direction'])"),
@@ -267,7 +263,7 @@ def main() -> int:
         set_input(cdp, '[aria-label="Run end date"]', "2025-01-02")
         escape(cdp)
         time.sleep(0.4)
-        runs_before = cdp.evaluate("document.querySelectorAll('.run-source button').length")
+        runs_before = cdp.evaluate("Number((document.querySelector('.run-context-bar')||{}).dataset?.runCount || 0)")
         ok &= check("Run enabled", cdp.evaluate(WAIT_ENABLED_JS))
         cdp.evaluate(INSTALL_OBSERVER_JS)
         cdp.evaluate(CLICK_RUN_JS)
@@ -275,7 +271,7 @@ def main() -> int:
         ok &= check("imported run completes + auto-loads", cdp.evaluate(WAIT_DONE_JS, timeout=180),
                     cdp.evaluate(f"({TEXT_JS})('.rr-notice')"))
         ok &= check("Running state appeared", cdp.evaluate("!!window.__sawRunning"))
-        runs_after = cdp.evaluate("document.querySelectorAll('.run-source button').length")
+        runs_after = cdp.evaluate("Number((document.querySelector('.run-context-bar')||{}).dataset?.runCount || 0)")
         ok &= check("exactly one new run (duplicate clicks ignored)", runs_after == runs_before + 1, f"{runs_before} -> {runs_after}")
 
         status_text = cdp.evaluate(f"({TEXT_JS})('.run-status')") or ""
@@ -300,16 +296,16 @@ def main() -> int:
         ok &= check("archive strategy identity", payload.get("strategy", {}).get("name") == "EMA Cross", str(payload.get("strategy")))
         ok &= check("archive effective parameters", payload.get("config", {}).get("parameters") == {"fast_period": 2, "slow_period": 5},
                     str(payload.get("config", {}).get("parameters")))
-        ok &= check("auto-loaded run rendered", cdp.evaluate(f"({WAIT_ROW_JS})(['{first_entry}','{DEMO_ENTRY}'])") if first_entry else False, first_entry)
-        trade_rows = cdp.evaluate("document.querySelectorAll('.overview-trade-log tbody tr').length")
+        ok &= check("auto-loaded run rendered", cdp.evaluate(f"({WAIT_ROW_JS})([{json.dumps(first_entry)},''])") if first_entry else False, first_entry)
+        trade_rows = cdp.evaluate("Number((document.querySelector('.run-context-bar')||{}).dataset?.tradeCount || 0)")
         ok &= check("trade count matches archive", trade_rows == len(trades), f"dom={trade_rows} archive={len(trades)}")
-        ok &= check("first trade matches archive", first_entry in (cdp.evaluate("(() => { const r=document.querySelector('.overview-trade-log tbody tr'); return r?r.textContent.replace(/\\s+/g,' '):''; })()") or ""))
+        first_row = cdp.evaluate("((document.querySelector('.run-context-bar')||{}).dataset||{}).firstEntry || ''")
+        ok &= check("first trade matches archive", first_entry in first_row, first_row[:80])
 
         # ---- existing flows still work ---------------------------------------
         ok &= check("run_0001 still loads", cdp.evaluate(f"({CLICK_SOURCE_JS})('run_0001')") == "CLICKED")
         ok &= check("run_0001 data restored", cdp.evaluate(f"({WAIT_ROW_JS})(['{RUN0001_ENTRY}',''])") )
-        ok &= check("switch to Demo", cdp.evaluate(f"({CLICK_SOURCE_JS})('Demo')") == "CLICKED")
-        ok &= check("Demo data restored", cdp.evaluate(f"({WAIT_ROW_JS})(['{DEMO_ENTRY}',''])") )
+
 
         errs = [e for e in cdp.console_errors
                 if "favicon" not in e.lower()

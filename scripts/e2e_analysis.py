@@ -21,22 +21,21 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from scripts.e2e_run_switch import e2e_main, launch_bridge, require_bridge_port_free
+from scripts.e2e_common import e2e_main, launch_bridge, require_bridge_port_free
 
-from scripts.e2e_run_switch import (  # noqa: E402
-    CDP, TEXT_JS, WAIT_BADGE_JS, WAIT_SEL_JS, WAIT_TEXT_JS, launch_chrome, wait_debugger,
+from scripts.e2e_common import (  # noqa: E402
+    CDP, OPEN_RUN_JS, TEXT_JS, WAIT_BADGE_JS, WAIT_SEL_JS, WAIT_TEXT_JS, launch_chrome, wait_debugger,
 )
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-APP_URL = "http://127.0.0.1:5173/?fixture=demo"
+APP_URL = "http://127.0.0.1:5173/"
 BRIDGE = "http://127.0.0.1:8765"
 PUBLIC = ROOT / "Quant-Backtest-Lab" / "public"
 MANIFEST = PUBLIC / "adapters-run-manifest.json"
 FIXTURE = ROOT / "tests" / "fixtures" / "run_0001"
 EMA_PATH = ROOT / "tests" / "fixtures" / "import" / "ema_cross.py"
-DEMO_ENTRY = "2,799.84"
 
 _POLL = "const t0=Date.now();const iv=setInterval(()=>{if(ok()||Date.now()-t0>MAX){clearInterval(iv);res(ok());}},250);"
 
@@ -55,7 +54,7 @@ WAIT_ENABLED_JS = ("(() => new Promise(res => {"
                    " const ok=()=>{const b=[...document.querySelectorAll('.real-run button')].find(x=>x.textContent.includes('Run Backtest'));return !!b && !b.disabled;};"
                    " if(ok())return res(true);" + _POLL.replace("MAX", "30000") + "}))()")
 WAIT_ROW_JS = ("(text => new Promise(res => {"
-               " const ok=()=>{const r=document.querySelector('.overview-trade-log tbody tr');return !!r && r.textContent.includes(text);};"
+               " const ok=()=>{const el=document.querySelector('.run-context-bar');const entry=(el&&el.dataset.firstEntry)||'';return !!entry && entry.includes(text);};"
                " if(ok())return res(true);" + _POLL.replace("MAX", "25000") + "}))")
 WAIT_NEW_RUN_JS = ("(prev => new Promise(res => {"
                    " const ok=()=>{const t=(document.querySelector('.run-status')||{}).textContent||'';"
@@ -179,7 +178,7 @@ def main() -> int:
         for dom in ("Page.enable", "Runtime.enable", "Log.enable", "Network.enable", "DOM.enable"):
             cdp.call(dom)
         cdp.call("Page.navigate", {"url": APP_URL})
-        ok &= check("app opens on Demo", cdp.evaluate(f"({WAIT_BADGE_JS})('DEMO')"))
+        ok &= check("app opens on an archived run", cdp.evaluate(f"({WAIT_BADGE_JS})('ARCHIVED RUN')"))
         ok &= check("bridge Connected", cdp.evaluate(f"({WAIT_TEXT_JS})(['.engine','Connected'])"))
         cdp.evaluate("window.open=(u)=>{window.__opened=u;return null;};")
 
@@ -290,9 +289,7 @@ def main() -> int:
         ok &= check("real-run enabled", cdp.evaluate(WAIT_ENABLED_JS))
         cdp.evaluate(CLICK_RUN_JS)
         ok &= check("real run still works", cdp.evaluate(f"({WAIT_NEW_RUN_JS})({json.dumps(best_expected)})", timeout=180))
-        cdp.evaluate(f"({CLICK_TEXT_JS})(['.run-source button','Demo'])")
-        ok &= check("Demo still works", cdp.evaluate(f"({WAIT_ROW_JS})(['{DEMO_ENTRY}'])"))
-        ok &= check("run_0001 still works", cdp.evaluate("(id=>{const b=[...document.querySelectorAll('.run-source button')].find(x=>x.textContent.includes(id)); if(!b)return false; b.click(); return true;})('run_0001')")
+        ok &= check("run_0001 still works", cdp.evaluate(f"({OPEN_RUN_JS})('run_0001')")
                     and cdp.evaluate(f"({WAIT_BADGE_JS})('ARCHIVED RUN')"))
 
         errs = [e for e in cdp.console_errors if "favicon" not in e.lower() and "status of 40" not in e.lower()]

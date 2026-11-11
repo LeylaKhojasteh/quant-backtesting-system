@@ -20,9 +20,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from scripts.e2e_run_switch import e2e_main, launch_bridge, require_bridge_port_free
+from scripts.e2e_common import e2e_main, launch_bridge, require_bridge_port_free
 
-from scripts.e2e_run_switch import (  # noqa: E402
+from scripts.e2e_common import (  # noqa: E402
     CDP, TEXT_JS, WAIT_BADGE_JS, WAIT_SEL_JS, WAIT_TEXT_JS, launch_chrome, wait_debugger,
 )
 
@@ -149,7 +149,7 @@ def main() -> int:
             chrome, cdp = open_app()
             ok &= check("real-use empty state shown when no runs", cdp.evaluate(WAIT_EMPTY_JS))
             ok &= check("badge is not DEMO without a run",
-                        "DEMO" not in (cdp.evaluate(f"({TEXT_JS})('.demo-badge')") or ""))
+                        "DEMO" not in (cdp.evaluate(f"({TEXT_JS})('.run-badge')") or ""))
             ok &= check("no demo source control exists",
                         not cdp.evaluate("([...document.querySelectorAll('.run-source button')].some(b=>b.textContent.includes('Demo')))"))
             cdp.ws.close()

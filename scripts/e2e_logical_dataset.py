@@ -17,10 +17,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from scripts.e2e_run_switch import e2e_main, launch_bridge, require_bridge_port_free
+from scripts.e2e_common import e2e_main, launch_bridge, require_bridge_port_free
 
-from scripts.e2e_run_switch import (  # noqa: E402
-    CDP, TEXT_JS, WAIT_BADGE_JS, WAIT_SEL_JS, WAIT_TEXT_JS, launch_chrome, wait_debugger,
+from scripts.e2e_common import (  # noqa: E402
+    CDP, OPEN_RUN_JS, TEXT_JS, WAIT_BADGE_JS, WAIT_SEL_JS, WAIT_TEXT_JS, launch_chrome, wait_debugger,
 )
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -102,8 +102,7 @@ def main() -> int:
                     "ticks.csv" not in ds_label and ".csv" not in ds_label, ds_label[:60])
         ok &= check("symbol derived read-only XAUUSD", (cdp.evaluate(f"({TEXT_JS})('[aria-label=\"Run symbol\"]')") or "").strip() == "XAUUSD")
         ok &= check("timeframe controlled", cdp.evaluate("!!document.querySelector('button[aria-label=\"Run timeframe\"]')"))
-        status = cdp.evaluate(f"({TEXT_JS})('[aria-label=\"Dataset status\"]')") or ""
-        ok &= check("dataset prepared state shown", "Data Ready" in status or "Preparation required" in status, status[:70])
+        ok &= check("no dataset coverage note", not cdp.evaluate("!!document.querySelector('[aria-label=\"Dataset status\"]')"))
 
         # golden range: 2025-01-31 (M15), through the real product path
         set_input(cdp, '[aria-label="Run start date"]', "2025-01-31")
@@ -138,7 +137,7 @@ def main() -> int:
         cdp.call("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27})
         cdp.call("Input.dispatchKeyEvent", {"type": "keyUp", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27})
         time.sleep(0.3)
-        cdp.evaluate("(id=>{const b=[...document.querySelectorAll('.run-source button')].find(x=>x.textContent.includes(id)); if(b) b.click(); return !!b;})('run_0001')")
+        cdp.evaluate(f"({OPEN_RUN_JS})('run_0001')")
         ok &= check("legacy run_0001 still works", cdp.evaluate(f"({WAIT_BADGE_JS})('ARCHIVED RUN')"))
 
         errs = [e for e in cdp.console_errors if "favicon" not in e.lower() and "status of 40" not in e.lower()]

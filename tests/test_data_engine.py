@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT))
 from src import data_engine as de  # noqa: E402
 
 FIXTURES = ROOT / "tests" / "fixtures" / "data_engine"
-JAN_CSV = ROOT / "data" / "XAUUSD_DUKAS_2025_01_ticks.csv"
+JAN_CSV = ROOT / "data" / "XAUUSD" / "XAUUSD_DUKAS_2025_01_ticks.csv"
 
 
 class FixtureCase(unittest.TestCase):
@@ -25,7 +25,9 @@ class FixtureCase(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.data = Path(self.tmp.name) / "data"
         self.data.mkdir()
-        for src in FIXTURES.glob("*.csv"):
+        # Keep this legacy suite isolated to its TESTSYM fixtures; the BTCUSDT
+        # fixture has its own end-to-end test and must not enter this catalog.
+        for src in FIXTURES.glob("TESTSYM_*.csv"):
             shutil.copy(src, self.data / src.name)
         self.root = Path(self.tmp.name) / "cache"
 
@@ -59,6 +61,61 @@ class ContractTest(FixtureCase):
         bad.write_text("1,2\n3,4\n", encoding="utf-8")
         with self.assertRaises(de.MalformedSchemaError):
             list(de.canonical_chunks(bad))
+
+
+class SourceChangeGuardTest(FixtureCase):
+    def test_changed_source_needs_explicit_optin(self):
+        raw = self.data / "TESTSYM_DUKAS_2099_01_ticks.csv"
+        de.build_partition(raw, self._pid(1), root=self.root)
+        text = raw.read_text(encoding="utf-8")
+        raw.write_text(text.replace("100.00", "100.05", 1), encoding="utf-8")
+
+        with self.assertRaises(de.SourceChangedError):
+            de.build_partition(raw, self._pid(1), root=self.root)
+
+        rebuilt = de.build_partition(
+            raw, self._pid(1), root=self.root, allow_source_change=True)
+        self.assertEqual(rebuilt["status"], "BUILT")
+        # The manifest now records the new fingerprint, so a later plain build
+        # is a cache hit rather than a permanent error.
+        again = de.build_partition(raw, self._pid(1), root=self.root)
+        self.assertEqual(again["status"], "CACHE HIT")
+
+
+class SymbolFolderTest(FixtureCase):
+    """Raw files may live in per-symbol folders; backups are never ingested."""
+
+    def test_nested_symbol_folder_is_discovered(self):
+        nested = self.data / "TESTSYM"
+        nested.mkdir()
+        src = self.data / "TESTSYM_DUKAS_2099_01_ticks.csv"
+        shutil.move(str(src), nested / src.name)
+
+        names = [p.name for p, _ in de.discover_partitions(self.data)]
+        self.assertIn("TESTSYM_DUKAS_2099_01_ticks.csv", names)
+
+        rels = [e["relative_path"] for e in de.inventory(self.data)]
+        self.assertIn("TESTSYM/TESTSYM_DUKAS_2099_01_ticks.csv", rels)
+
+    def test_underscore_folder_is_never_ingested(self):
+        backup = self.data / "_archive"
+        backup.mkdir()
+        src = self.data / "TESTSYM_DUKAS_2099_01_ticks.csv"
+        shutil.copy(src, backup / src.name)
+
+        rels = [e["relative_path"] for e in de.inventory(self.data)]
+        self.assertFalse([r for r in rels if r.startswith("_")])
+        self.assertEqual(len(de.discover_partitions(self.data)), 2)
+
+    def test_duplicate_month_is_rejected_not_double_counted(self):
+        duplicate = self.data / "TESTSYM_COPY"
+        duplicate.mkdir()
+        src = self.data / "TESTSYM_DUKAS_2099_01_ticks.csv"
+        shutil.copy(src, duplicate / src.name)
+
+        with self.assertRaises(de.MalformedSchemaError) as ctx:
+            de.discover_partitions(self.data)
+        self.assertIn("duplicate monthly source", str(ctx.exception))
 
 
 class BuildVerifyTest(FixtureCase):
@@ -336,9 +393,15 @@ class CompletenessProvenanceTest(unittest.TestCase):
     """Completeness is explicit source provenance, never a coverage heuristic."""
 
     def test_explicit_registry_values(self):
-        for m in range(1, 13):
-            self.assertEqual(de.source_completeness(f"XAUUSD_DUKAS_2025_{m:02d}_ticks.csv"), "complete")
-        self.assertEqual(de.source_completeness("XAUUSD_DUKAS_2026_01_ticks.csv"), "partial")
+        for year, months in ((2024, 12), (2025, 12), (2026, 6)):
+            for m in range(1, months + 1):
+                self.assertEqual(
+                    de.source_completeness(f"XAUUSD_DUKAS_{year}_{m:02d}_ticks.csv"),
+                    "complete",
+                )
+        # The bundled sample is a partial extract, not a real month.
+        self.assertEqual(
+            de.source_completeness("XAUUSD_SAMPLE_2024_12_ticks.csv"), "partial")
 
     def test_undeclared_source_defaults_to_unknown(self):
         self.assertEqual(de.source_completeness("SOME_FUTURE_DUKAS_2099_07_ticks.csv"), "unknown")
@@ -386,28 +449,31 @@ class RealLineageTest(unittest.TestCase):
     def test_verified_real_totals_and_roles(self):
         s = de.logical_summary()
         self.assertEqual(s["logical_dataset_id"], "xauusd_dukas_ticks")
-        self.assertEqual(s["raw_inventory_files"], 14)
-        self.assertEqual(s["authoritative_monthly_partitions"], 13)
+        self.assertEqual(s["raw_inventory_files"], 30)
+        self.assertEqual(s["authoritative_monthly_partitions"], 30)
         self.assertEqual(s["monthly_2025_partitions"], 12)
-        self.assertEqual(s["monthly_2026_partitions"], 1)
-        self.assertEqual(s["rows_2025"], 71_413_977)
-        self.assertEqual(s["rows_2026"], 7_245)
-        self.assertEqual(s["total_logical_rows"], 71_421_222)
-        self.assertEqual(s["aggregate_rows"], 71_413_966)
+        self.assertEqual(s["monthly_2026_partitions"], 6)
+        self.assertEqual(s["rows_by_year"], {
+            2024: 56_217_145, 2025: 71_413_977, 2026: 50_109_364,
+        })
+        self.assertEqual(s["total_logical_rows"], 177_740_486)
+        # The aggregate files live in data/_archive and are never ingested.
+        self.assertEqual(s["aggregate_reference_files"], 0)
         self.assertFalse(s["aggregate_included_in_logical_total"])
-        self.assertEqual(s["aggregate_missing_ticks_vs_monthly_2025"], 11)
+        self.assertIsNone(s["aggregate_missing_ticks_vs_monthly_2025"])
 
-    def test_2026_partial_coverage(self):
-        ds = next(iter(de.load_catalog()["datasets"].values()))
+    def test_all_imported_months_are_declared_complete(self):
+        # Multiple symbols now share the catalog; this lineage test is about
+        # XAUUSD, so name it instead of taking whatever happens to be first.
+        ds = de.load_catalog()["datasets"]["xauusd_dukas_ticks"]
         by_month = {d["month"]: d for d in ds["month_details"]}
-        self.assertEqual(by_month["2026-01"]["completeness"], "partial")
-        self.assertEqual(by_month["2026-01"]["rows"], 7_245)
-        self.assertIn("2026-01", ds["partial_months"])
-        # 2025 is known complete: 12/12 months complete, and the only partial is 2026-01
-        complete_2025 = [m for m, d in by_month.items()
-                         if m.startswith("2025-") and d["completeness"] == "complete"]
-        self.assertEqual(len(complete_2025), 12)
-        self.assertEqual(ds["partial_months"], ["2026-01"])
+        self.assertEqual(len(by_month), 30)
+        self.assertEqual(by_month["2026-01"]["completeness"], "complete")
+        self.assertEqual(by_month["2026-01"]["rows"], 9_135_062)
+        self.assertEqual(by_month["2024-01"]["completeness"], "complete")
+        self.assertEqual(by_month["2024-01"]["rows"], 3_059_497)
+        self.assertEqual(ds["partial_months"], [])
+        self.assertTrue(all(d["completeness"] == "complete" for d in by_month.values()))
 
     def test_real_range_pruning_and_no_all(self):
         self.assertEqual(de.select_partitions("XAUUSD", "2025-03-17", "2025-05-08"), ["2025-03", "2025-04", "2025-05"])

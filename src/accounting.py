@@ -24,6 +24,13 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Optional
 
+from src.instruments import (
+    InstrumentSpec,
+    instrument_catalog as _instrument_catalog,
+    load_registry,
+    resolve_instrument as _resolve_instrument,
+)
+
 # --------------------------------------------------------------------------
 # Contracts
 # --------------------------------------------------------------------------
@@ -42,43 +49,19 @@ class AccountModel:
         return asdict(self)
 
 
-@dataclass
-class InstrumentSpec:
-    """Instrument economics required to convert price PnL to account money."""
-
-    symbol: str
-    quote_currency: str
-    contract_size: float
-    tick_size: Optional[float] = None
-    #: Price value of one pip for this instrument. Explicit metadata only — never
-    #: inferred from decimal digits or tick size. ``None`` means unknown, so
-    #: pip-denominated SL/TP cannot be resolved for the symbol.
-    pip_size: Optional[float] = None
-
-    def to_dict(self) -> dict:
-        return asdict(self)
-
-
-#: Explicit, editable catalog. Never hardcode these inside the math functions;
-#: the calculation layer always receives an InstrumentSpec.
-INSTRUMENT_CATALOG: dict[str, InstrumentSpec] = {
-    "XAUUSD": InstrumentSpec("XAUUSD", "USD", 100.0, 0.01, 0.01),
-    "EURUSD": InstrumentSpec("EURUSD", "USD", 100000.0, 0.00001, 0.0001),
-    "GBPUSD": InstrumentSpec("GBPUSD", "USD", 100000.0, 0.00001, 0.0001),
-    "USDJPY": InstrumentSpec("USDJPY", "JPY", 100000.0, 0.001, 0.01),
-}
+#: Compatibility snapshot for callers/tests that import ``INSTRUMENT_CATALOG``.
+#: The authoritative registry is ``config/instruments.json`` (editable data).
+INSTRUMENT_CATALOG: dict[str, InstrumentSpec] = load_registry()
 
 
 def instrument_catalog() -> list[dict]:
     """Catalog entries for the frontend instrument helper (metadata only)."""
-    return [spec.to_dict() for spec in INSTRUMENT_CATALOG.values()]
+    return _instrument_catalog()
 
 
 def resolve_instrument(symbol: str, explicit: Optional[InstrumentSpec]) -> Optional[InstrumentSpec]:
-    """Prefer an explicit spec; otherwise fall back to the catalog by symbol."""
-    if explicit is not None:
-        return explicit
-    return INSTRUMENT_CATALOG.get((symbol or "").strip().upper())
+    """Prefer an explicit spec; otherwise resolve from the data-driven registry."""
+    return _resolve_instrument(symbol, explicit)
 
 
 # --------------------------------------------------------------------------
@@ -106,15 +89,17 @@ def compatibility_reason(account: AccountModel, instrument: InstrumentSpec) -> O
 # --------------------------------------------------------------------------
 
 
-def trade_account_pnl(pnl_price: float, instrument: InstrumentSpec, account: AccountModel) -> tuple[float, float, float]:
+def trade_account_pnl(pnl_price: float, instrument: InstrumentSpec, account: AccountModel, size_multiplier: float = 1.0) -> tuple[float, float, float]:
     """Return ``(gross, commission, net)`` in account currency for one trade.
 
-    gross = price-term PnL x contract size x lots. Spread is already inside
-    ``pnl_price`` and is not applied again. commission is a per-lot round-turn
-    charge, applied exactly once per closed trade.
+    gross = price-term PnL x contract size x lots x size_multiplier. Spread is
+    already inside ``pnl_price`` and is not applied again. commission is a
+    per-lot round-turn charge, applied exactly once per closed trade, scaled
+    by the same multiplier. Price-term metrics are never scaled.
     """
-    gross = float(pnl_price) * float(instrument.contract_size) * float(account.position_size_lots)
-    commission = float(account.commission_per_lot_round_turn) * float(account.position_size_lots)
+    lots = float(account.position_size_lots) * float(size_multiplier)
+    gross = float(pnl_price) * float(instrument.contract_size) * lots
+    commission = float(account.commission_per_lot_round_turn) * lots
     return gross, commission, gross - commission
 
 
@@ -173,7 +158,10 @@ def build_account_report(trades: list, account: AccountModel, instrument: Instru
     commissions: list[float] = []
 
     for t in ordered:
-        gross, commission, net = trade_account_pnl(float(_get(t, "pnl_price", 0.0)), instrument, account)
+        gross, commission, net = trade_account_pnl(
+            float(_get(t, "pnl_price", 0.0)), instrument, account,
+            float(_get(t, "size_multiplier", 1.0) or 1.0),
+        )
         balance += net
         nets.append(net)
         grosses.append(gross)
