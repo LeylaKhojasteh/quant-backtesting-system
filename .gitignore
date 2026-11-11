@@ -10,6 +10,10 @@ data/*
 data/sample/*
 !data/sample/*.csv
 
+# Raw OHLC candle sources (large, local). Rebuild with
+# `python -m src.candle_data build`; never commit market data.
+data_candles/
+
 # Archives
 *.zip
 *.rar
@@ -31,6 +35,12 @@ __pycache__/
 # reference runs used by automated tests).
 runs/
 !runs/.gitkeep
+
+# Generated local artifacts: published run snapshots, validation dumps and
+# the generated project tree are reproducible output, not source.
+Quant-Backtest-Lab/public/runs-run_*.json
+candle_model_validation.txt
+PROJECT_TREE.md
 
 # Dev server logs
 .qbl-dev*.log
