@@ -47,4 +47,4 @@ executable price (LONG → BID, SHORT → ASK) with reason `END_OF_DATA`.
 ## Terms
 
 - Results are in **price terms** unless the optional Account Model is enabled.
-- MAE/MFE are not provided by the engine (shown unavailable).
+- MAE/MFE are tracked tick-by-tick on the exit side (BID for LONG, ASK for SHORT). MAE is signed `<= 0`, MFE is signed `>= 0`, in price terms; the entry spread and exit tick are included.

@@ -59,6 +59,41 @@ cache/
 `source_row` is internal ordering metadata only and does not change trading
 semantics; the engine reader drops it.
 
+## Accepted source formats
+
+- Monthly filename: `<symbol>_<provider>_<YYYY>_<MM>_ticks.csv`. Symbol may
+  contain letters, digits, `.`, `_` or `-` (e.g. `BTCUSDT`, `EUR_USD`, `BTC-USD`).
+- Header CSV: `timestamp,bid,ask` (case-insensitive column names). Optional
+  `bid_volume`/`ask_volume`; missing volumes become `0`.
+- `timestamp` accepts ISO-8601 strings or numeric epoch in seconds,
+  milliseconds, microseconds or nanoseconds. Offset-aware timestamps keep their
+  offset and are converted to UTC. Naive timestamps are interpreted in the
+  source timezone declared in `config/source_timezones.json` (filename override,
+  then provider, default UTC). Numeric `YYYYMMDD` strings are calendar dates in
+  that source timezone.
+- Headerless Dukascopy `date,time,bid,ask[,bid_volume,ask_volume]` is supported;
+  `date,time` is wall-clock UTC. Microseconds are optional.
+- OHLCV-only and trade-only (`timestamp,price,volume`) files are rejected
+  explicitly. There is no synthetic BID/ASK conversion.
+
+## Metadata registries (data, not code)
+
+- `config/instruments.json` holds instrument economics: quote currency,
+  contract size, tick size, pip size, digits, price scale, asset class,
+  session and optional leverage/margin/swap fields. Adding a symbol is a data
+  edit, not a code change.
+- `config/source_completeness.json` declares whether each monthly source is
+  `complete`, `partial` or `unknown`. Undeclared files stay `unknown` and are
+  never treated as complete.
+- `config/source_timezones.json` declares provider and per-file source timezones
+  for naive wall-clock timestamps. Offset-aware timestamps override it.
+- `config/providers.json` lists known provider tokens (longest first), so
+  providers containing `_` such as `BINANCE_SPOT` parse unambiguously.
+- Override paths with `QBL_INSTRUMENTS_FILE`, `QBL_COMPLETENESS_FILE`,
+  `QBL_SOURCE_TIMEZONES_FILE` and `QBL_PROVIDERS_FILE`.
+- `run_backtest` archives the resolved instrument metadata in
+  `config.instrument`, and the frontend exposes it on the run instrument.
+
 ## Verified data semantics (preserved exactly)
 
 - Dukascopy `date,time` wall-clock is interpreted as UTC **without shifting**.
@@ -230,6 +265,11 @@ cache/market_data/candles/
   rebuild, never an ALL fallback).
 
 ## Bridge & product
+
+- The HTTP bridge accepts `cache:<dataset_id>` or raw files under its configured
+  `--data-dir`; arbitrary filesystem paths are rejected. CLI and in-process
+  callers keep the existing raw-path behavior.
+
 
 - `GET /datasets` exposes logical datasets (`dataset_id`, symbol, provider,
   coverage, complete/partial, supported + prepared timeframes, default range) —

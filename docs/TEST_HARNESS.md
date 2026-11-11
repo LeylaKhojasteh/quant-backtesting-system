@@ -1,7 +1,7 @@
 # E2E / Browser Test Harness Safety
 
 All browser-based test scripts in `scripts/` (`e2e_*.py`, `ui_*.py`) run through a
-small shared harness defined in `scripts/e2e_run_switch.py`. Its purpose is to make
+small shared harness defined in `scripts/e2e_common.py`. Its purpose is to make
 test execution **serial, bounded, and isolated from the user's personal Chrome
 session**.
 

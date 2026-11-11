@@ -1,0 +1,54 @@
+{
+  "package": "strategy comparison package",
+  "settings": {
+    "symbol": "XAUUSD",
+    "timeframe": "15min",
+    "start": "2024-12-04",
+    "end": "2024-12-04",
+    "stop_distance": 2.0,
+    "take_profit_distance": 4.0,
+    "spread_policy": "observed ask - bid from each tick; no additional spread",
+    "volume": 1.0,
+    "commission": 0.0,
+    "commission_note": "not modelled by the engine; price-term PnL"
+  },
+  "strategy": {
+    "id": "candle_direction",
+    "name": "Candle Direction",
+    "version": "1.0",
+    "description": "Close > Open -> LONG, Close < Open -> SHORT. Signal tradable after candle close.",
+    "logic": "Close > Open -> LONG; Close < Open -> SHORT; Close == Open -> no signal. Signal available at the source candle close (bar start + timeframe)."
+  },
+  "input": {
+    "path": "data/sample/XAUUSD_SAMPLE_2024_12_ticks.csv",
+    "sha256": "dc93d9703be5e37245875490a407882f16d24532027887062360780f5762ea71",
+    "format": "headerless: date,time,bid,ask,bid_volume,ask_volume (UTC)",
+    "ticks": 193121,
+    "first_tick_utc": "2024-12-04T00:00:01.034000Z",
+    "last_tick_utc": "2024-12-04T15:59:59.975000Z",
+    "spread_min": 0.001,
+    "spread_mean": 0.38872,
+    "spread_max": 1.842,
+    "bid_min": 2632.315,
+    "bid_max": 2656.998
+  },
+  "execution_contract": {
+    "long_entry": "ASK of the first tick at/after signal availability",
+    "short_entry": "BID of the first tick at/after signal availability",
+    "long_exit": "BID of the triggering tick",
+    "short_exit": "ASK of the triggering tick",
+    "stop_checked_before_take_profit": true,
+    "one_position_at_a_time": true,
+    "signals_while_open": "dropped, not queued",
+    "end_of_data": "open position closed at the last tick's BID (LONG) / ASK (SHORT)"
+  },
+  "result": {
+    "trades": 31,
+    "net_pnl_price": -20.658,
+    "signals_received": 64,
+    "signals_executed": 31,
+    "signals_ignored": 33,
+    "candles": 64,
+    "ticks_used": 193121
+  }
+}
